@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- W letter stylized as wew logo -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,36 L38,72 L46,48 L54,72 L62,36 L70,36 L58,84 L50,60 L42,84 L30,36 Z"
+        android:strokeWidth="0" />
+    
+    <!-- Decorative dot -->
+    <path
+        android:fillColor="#EC4899"
+        android:pathData="M72,40 m-4,0 a4,4 0,1 1,8 0 a4,4 0,1 1,-8 0" />
+        
+</vector>

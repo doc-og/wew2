@@ -1,0 +1,43 @@
+# Claude local settings (secrets)
+.claude/settings.local.json
+
+# Project secrets vault (never commit)
+.env
+.env.local
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Android build outputs
+launcher/build/
+launcher/app/build/
+launcher/.gradle/
+launcher/local.properties
+parent-app/build/
+parent-app/app/build/
+parent-app/.gradle/
+parent-app/local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Web dashboard
+web-dashboard/node_modules/
+web-dashboard/dist/
+web-dashboard/.env
+web-dashboard/.env.local
+
+# Supabase
+supabase/.temp/
+supabase/supabase/.temp/
+supabase/functions/.env
+
+# Claude Code local worktrees (nested git repos)
+.claude/worktrees/
+.claire/worktrees/
+
+# Logs
+*.log

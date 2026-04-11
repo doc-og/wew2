@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">wew</string>
+    <string name="device_admin_label">wew parental control</string>
+    <string name="device_admin_description">Wew requires device administration to keep your phone safe and prevent unauthorized changes.</string>
+</resources>

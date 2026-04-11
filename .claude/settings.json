@@ -1,0 +1,25 @@
+{
+  "env": {
+    "JAVA_HOME": "/Applications/Android Studio.app/Contents/jbr/Contents/Home",
+    "ANDROID_HOME": "/Users/drseanogrady/Library/Android/sdk",
+    "ANDROID_SDK_ROOT": "/Users/drseanogrady/Library/Android/sdk",
+    "PATH": "/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin:/Users/drseanogrady/Library/Android/sdk/platform-tools:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(supabase *)",
+      "Bash(firebase *)",
+      "Bash(./gradlew *)",
+      "Bash(adb *)",
+      "Bash(npm run *)",
+      "Bash(npm install*)",
+      "Bash(git *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(cat *)",
+      "Bash(brew *)"
+    ]
+  }
+}
