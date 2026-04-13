@@ -6,6 +6,7 @@ import com.wew.parent.data.model.AppInfo
 import com.wew.parent.data.model.CreditChange
 import com.wew.parent.data.model.Device
 import com.wew.parent.data.model.LocationPoint
+import com.wew.parent.data.model.DevicePasscode
 import com.wew.parent.data.model.NotificationConfig
 import com.wew.parent.data.model.Schedule
 import io.github.jan.supabase.gotrue.auth
@@ -230,5 +231,31 @@ class ParentRepository {
 
     suspend fun upsertNotificationConfig(config: NotificationConfig) {
         supabase.postgrest["notifications_config"].upsert(config, onConflict = "parent_user_id")
+    }
+
+    // Passcode — stored as SHA-256(deviceId + pin)
+    suspend fun getPasscode(deviceId: String): DevicePasscode? {
+        return runCatching {
+            supabase.postgrest["device_passcode"]
+                .select(Columns.ALL) { filter { eq("device_id", deviceId) } }
+                .decodeList<DevicePasscode>()
+                .firstOrNull()
+        }.getOrNull()
+    }
+
+    suspend fun setPasscode(deviceId: String, pinHash: String) {
+        supabase.postgrest["device_passcode"].upsert(
+            buildJsonObject {
+                put("device_id", deviceId)
+                put("passcode_hash", pinHash)
+                put("updated_at", "now()")
+            },
+            onConflict = "device_id"
+        )
+    }
+
+    suspend fun removePasscode(deviceId: String) {
+        supabase.postgrest["device_passcode"]
+            .delete { filter { eq("device_id", deviceId) } }
     }
 }

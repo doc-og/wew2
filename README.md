@@ -268,3 +268,148 @@ Device Admin prevents uninstall/launcher replacement. Revocation triggers FCM al
 - CI must pass. “High-risk” ops require explicit approval.
 - Secrets live in 1Password; never commit credentials.
 
+---
+
+## Coding standards
+
+### General
+- **Small deliverables.** Every PR ships one user-visible behavior. If you can't describe what a user will see differently, break it down further.
+- **No speculative code.** Don't add abstractions or fields “for later.” Build exactly what is needed now.
+- **Plain English comments.** Explain *why*, not *what*. If the code is obvious, skip the comment.
+- **No jargon in user-facing strings.** Write the way a child's parent would speak.
+
+### Android / Kotlin
+- **Jetpack Compose only** for all new UI. No XML layouts.
+- **MVVM.** ViewModels own state. Composables receive data and emit events — no logic in composables.
+- **StateFlow for UI state.** One `UiState` data class per ViewModel. Never expose `MutableStateFlow` directly.
+- **supabase-kt 2.1.4 + Kotlin 1.9.22.** Do not upgrade without upgrading Kotlin to 2.0+ simultaneously.
+- **No `rpc()` calls in Kotlin.** All DB ops via direct table inserts/updates/selects.
+- **`onConflict` parameter form only:** `upsert(data, onConflict = “col1,col2”)`.
+- **Batch upserts use `buildJsonObject`.** Typed data classes in batch upserts produce PostgREST “All object keys must match” errors. Build JSON manually for all bulk operations.
+- **AppCompat theme in XML, Material3 in Compose.** Both apps use `Theme.AppCompat.DayNight.NoActionBar` as the XML theme; `MaterialTheme {}` wraps Compose content.
+- **Errors are logged, never swallowed.** All `runCatching` failures call `Log.e()` with the full exception.
+
+### Database
+- New features = new migration file (`00N_description.sql`). Never edit existing migrations.
+- All tables require `created_at timestamptz NOT NULL DEFAULT now()`.
+- Add an index for every foreign key used as a filter.
+- Every new table needs RLS policies (parent sees only their own device's data).
+
+### Secrets
+- Never commit credentials. Android: `local.properties`. Scripts: `.env`.
+- Supabase credentials: `/Users/drseanogrady/wew/wew 2/.env` (gitignored).
+
+---
+
+## Credit / token system
+
+Every meaningful action the child takes costs credits from their daily budget.
+
+### Base costs
+
+| Action | Credits |
+|--------|---------|
+| Open an app | 1 |
+| Send a message | 1 |
+| Make a call | 2 |
+| Receive a call | 2 |
+| Take a photo | 2 |
+| Share a photo | 5 |
+| Open a web link | 2 |
+| Access an unauthorized app (temp grant) | 2 |
+| Check In (send location to parent) | 0 — always free |
+| Add or request a contact | 0 — always free |
+| SOS call | 0 — always free |
+
+### Scaling rule
+Once the child has used more than 50% of their daily budget, each action costs progressively more:
+
+- 50–60% used → base cost  
+- 60–70% used → base + 1  
+- 70–80% used → base + 2  
+- 80–90% used → base + 3  
+- 90%+ used → base + 4  
+
+The last 20% of credits is effectively double cost — designed to slow down usage naturally rather than cutting the child off abruptly.
+
+### Daily reset
+Credits reset to `daily_credit_budget` at `credits_reset_time` (default 7:00 AM) via a Supabase cron job (`pg_cron` extension required). Parents can adjust the budget and add/remove credits manually from the dashboard at any time.
+
+### Emergency access
+SOS, Check In, and contact requests never cost credits and are available even when the credit balance is zero.
+
+---
+
+## Development workflow
+
+### 1. Branch from main
+```bash
+git checkout main && git pull
+git checkout -b feature/<short-description>
+# or: fix/<short-description>
+```
+
+### 2. Implement
+Make the smallest change that ships the feature. Build locally and run on a device or emulator before opening a PR.
+
+### 3. Test locally
+- Rebase from `main` before testing: `git rebase main`
+- Build the relevant APK(s)
+- Verify every acceptance criterion manually
+- A notification is sent when local testing is ready, with a summary of what to test and how
+
+### 4. Open a pull request
+```bash
+gh pr create --title “feat: <description>” --body “...”
+```
+
+Every PR must include:
+- Plain-English summary of what changed and why
+- List of files changed with a one-line description of each
+- Step-by-step QA instructions (what to tap, what to expect)
+
+### 5. Code review (CodeRabbit)
+CodeRabbit reviews every PR automatically. Address all blocking comments before merging. To re-trigger after fixes, reply `@coderabbitai review` in the PR thread.
+
+### 6. QA on device
+A notification is sent with the PR link and QA steps. Sideload the APK, run each QA step, then approve.
+
+### 7. Merge
+Squash merge to `main`. Deploy edge functions and web dashboard as needed.
+
+---
+
+## Ticket format (GitHub Issues)
+
+Every PR has a matching GitHub Issue:
+
+```
+## Summary
+One sentence: what this does and why.
+
+## Files changed
+- `path/to/file.kt` — what changed and why
+
+## QA steps
+1. [Setup] Install the debug APK
+2. [Action] Tap X
+3. [Expected] Y appears / Z happens
+...
+
+## Notes
+Known limitations, follow-up tickets, gotchas.
+```
+
+---
+
+## Notification workflow
+
+| Event | Who gets notified | What's in the notification |
+|-------|------------------|---------------------------|
+| Local build ready to test | Sean | Brief summary + how to test each feature |
+| PR opened and ready for QA | Sean | PR link + QA steps |
+| Child checks in (location share) | Parent (FCM) | “Child checked in” + map link |
+| Child requests contact authorization | Parent (FCM) | Contact name + approve/deny link |
+| Credits running low | Parent (FCM) | Current balance + threshold |
+| Unauthorized app access attempt | Parent (FCM) | App name + attempt count |
+

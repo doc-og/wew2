@@ -96,6 +96,13 @@ function buildNotification(type: string, data: Record<string, string>): { title:
         title: 'location updated',
         body: "your child's location has been refreshed",
       }
+    case 'check_in': {
+      const msg = data?.message ? data.message : 'your child shared their location'
+      return {
+        title: '📍 Child checked in',
+        body: msg,
+      }
+    }
     default:
       return { title: 'wew alert', body: type }
   }

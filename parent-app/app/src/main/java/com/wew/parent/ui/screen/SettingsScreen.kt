@@ -15,14 +15,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,6 +43,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -69,6 +76,9 @@ fun SettingsScreen(userId: String, deviceId: String) {
     var notifyBlockedApps by remember { mutableStateOf(true) }
     var notifyTamperAttempts by remember { mutableStateOf(true) }
     var selectedTimeoutMins by remember { mutableIntStateOf(prefs.getInt("auto_logout_timeout_mins", 2)) }
+    var hasPasscode by remember { mutableStateOf(false) }
+    var showPinEntry by remember { mutableStateOf(false) }
+    var pinInput by remember { mutableStateOf("") }
 
     LaunchedEffect(userId) {
         config = repo.getNotificationConfig(userId)
@@ -78,6 +88,7 @@ fun SettingsScreen(userId: String, deviceId: String) {
             notifyBlockedApps = it.notifyBlockedApps
             notifyTamperAttempts = it.notifyTamperAttempts
         }
+        hasPasscode = repo.getPasscode(deviceId) != null
     }
 
     Column(
@@ -104,27 +115,94 @@ fun SettingsScreen(userId: String, deviceId: String) {
 
         // Security section
         SectionCard(title = "Security") {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    "Auto-logout timeout",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF1A1A2E)
-                )
-                Text(
-                    "Sign out after this period of inactivity or when the app closes",
-                    fontSize = 12.sp,
-                    color = Color(0xFF6B6B8A),
-                    lineHeight = 17.sp
-                )
-                Spacer(Modifier.height(12.dp))
-                TimeoutPicker(
-                    selectedMins = selectedTimeoutMins,
-                    onSelect = { mins ->
-                        selectedTimeoutMins = mins
-                        prefs.edit().putInt("auto_logout_timeout_mins", mins).apply()
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                // Auto-logout timeout
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Auto-logout timeout",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF1A1A2E)
+                    )
+                    Text(
+                        "Sign out after this period of inactivity or when the app closes",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6B6B8A),
+                        lineHeight = 17.sp
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    TimeoutPicker(
+                        selectedMins = selectedTimeoutMins,
+                        onSelect = { mins ->
+                            selectedTimeoutMins = mins
+                            prefs.edit().putInt("auto_logout_timeout_mins", mins).apply()
+                        }
+                    )
+                }
+
+                // Child passcode
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Child passcode",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF1A1A2E)
+                    )
+                    Text(
+                        "Lets your child unlock any app for a limited time",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6B6B8A),
+                        lineHeight = 17.sp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (showPinEntry) {
+                        OutlinedTextField(
+                            value = pinInput,
+                            onValueChange = { if (it.length <= 4) pinInput = it },
+                            label = { Text("4-digit PIN") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    if (pinInput.length == 4) {
+                                        scope.launch {
+                                            repo.setPasscode(deviceId, hashPin(deviceId, pinInput))
+                                            hasPasscode = true
+                                            showPinEntry = false
+                                            pinInput = ""
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = BrandViolet)
+                            ) { Text("Save", color = Color.White) }
+                            TextButton(onClick = { showPinEntry = false; pinInput = "" }) {
+                                Text("Cancel", color = Color(0xFF6B6B8A))
+                            }
+                        }
+                    } else {
+                        if (!hasPasscode) {
+                            Button(
+                                onClick = { showPinEntry = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = BrandViolet)
+                            ) { Text("Set passcode", color = Color.White) }
+                        } else {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { showPinEntry = true },
+                                    colors = ButtonDefaults.buttonColors(containerColor = BrandViolet)
+                                ) { Text("Change passcode", color = Color.White) }
+                                TextButton(onClick = {
+                                    scope.launch { repo.removePasscode(deviceId); hasPasscode = false }
+                                }) { Text("Remove", color = Color(0xFF6B6B8A)) }
+                            }
+                        }
                     }
-                )
+                }
             }
         }
 
@@ -281,4 +359,10 @@ private fun SettingRow(label: String, subtitle: String, trailing: @Composable ()
         Text(subtitle, fontSize = 12.sp, color = Color(0xFF6B6B8A))
         trailing()
     }
+}
+
+private fun hashPin(deviceId: String, pin: String): String {
+    val input = "$deviceId$pin"
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    return digest.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
 }

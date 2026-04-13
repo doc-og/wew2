@@ -111,9 +111,53 @@ enum class ActionType(val value: String, val baseCost: Int) {
     DEVICE_ADMIN_REVOKED("device_admin_revoked", 0),
     LOCK_ACTIVATED("lock_activated", 0),
     LOCK_DEACTIVATED("lock_deactivated", 0),
-    CREDIT_EXHAUSTED("credit_exhausted", 0);
+    CREDIT_EXHAUSTED("credit_exhausted", 0),
+    TEMP_ACCESS_GRANTED("temp_access_granted", 2),
+    CHECK_IN("check_in", 0),
+    CONTACT_REQUESTED("contact_requested", 0);
 
     companion object {
         fun fromValue(value: String) = entries.firstOrNull { it.value == value }
     }
 }
+
+@Serializable
+data class DevicePasscodeRecord(
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("passcode_hash") val passcodeHash: String,
+    @SerialName("created_at") val createdAt: String? = null
+)
+
+@Serializable
+data class TempAppAccess(
+    val id: String? = null,
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("package_name") val packageName: String,
+    @SerialName("expires_at") val expiresAt: String,
+    @SerialName("granted_by") val grantedBy: String = "passcode",
+    @SerialName("created_at") val createdAt: String? = null
+)
+
+@Serializable
+data class WewContact(
+    val id: String? = null,
+    @SerialName("device_id") val deviceId: String,
+    val name: String,
+    val phone: String? = null,
+    val email: String? = null,
+    val address: String? = null,
+    @SerialName("photo_url") val photoUrl: String? = null,
+    @SerialName("is_authorized") val isAuthorized: Boolean = false,
+    val notes: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("updated_at") val updatedAt: String? = null
+)
+
+@Serializable
+data class ContactAuthRequest(
+    val id: String? = null,
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("contact_id") val contactId: String,
+    val status: String = "pending",
+    @SerialName("created_at") val createdAt: String? = null
+)
