@@ -26,6 +26,7 @@ import com.wew.launcher.ui.screen.ChatScreen
 import com.wew.launcher.ui.screen.CheckInScreen
 import com.wew.launcher.ui.screen.ContactsScreen
 import com.wew.launcher.ui.screen.ConversationListScreen
+import com.wew.launcher.ui.screen.MapScreen
 import com.wew.launcher.ui.screen.SetupActivity
 import com.wew.launcher.ui.screen.WebViewScreen
 import com.wew.launcher.ui.theme.WewLauncherTheme
@@ -43,6 +44,7 @@ private sealed class WewScreen {
         val displayName: String
     ) : WewScreen()
     data class Web(val url: String) : WewScreen()
+    object Map : WewScreen()
 }
 
 // ── Activity ──────────────────────────────────────────────────────────────────
@@ -95,7 +97,8 @@ class MainActivity : ComponentActivity() {
                             onOpenCheckIn = {
                                 checkInViewModel.reset()
                                 showCheckIn = true
-                            }
+                            },
+                            onOpenMap = { screen = WewScreen.Map }
                         )
 
                         if (showContacts) {
@@ -128,6 +131,10 @@ class MainActivity : ComponentActivity() {
                             initialUrl = s.url,
                             onBack = { screen = WewScreen.ConversationList }
                         )
+                    }
+
+                    WewScreen.Map -> {
+                        MapScreen(onBack = { screen = WewScreen.ConversationList })
                     }
                 }
             }
