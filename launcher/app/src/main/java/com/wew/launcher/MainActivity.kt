@@ -95,8 +95,7 @@ class MainActivity : ComponentActivity() {
                             onOpenCheckIn = {
                                 checkInViewModel.reset()
                                 showCheckIn = true
-                            },
-                            onOpenBrowser = { screen = WewScreen.Web("https://www.google.com") }
+                            }
                         )
 
                         if (showContacts) {
@@ -119,7 +118,8 @@ class MainActivity : ComponentActivity() {
                             threadId = s.threadId,
                             recipientAddress = s.address,
                             displayName = s.displayName,
-                            onBack = { screen = WewScreen.ConversationList }
+                            onBack = { screen = WewScreen.ConversationList },
+                            onOpenUrl = { url -> screen = WewScreen.Web(url) }
                         )
                     }
 

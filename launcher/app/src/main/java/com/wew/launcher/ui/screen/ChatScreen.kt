@@ -50,14 +50,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -80,12 +86,15 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
+private val URL_REGEX = Regex("""https?://[^\s<>"]+""")
+
 @Composable
 fun ChatScreen(
     threadId: Long,
     recipientAddress: String,
     displayName: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenUrl: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val vm: ChatViewModel = viewModel(
@@ -198,7 +207,8 @@ fun ChatScreen(
                 items(state.messages, key = { it.id }) { msg ->
                     MessageBubble(
                         message = msg,
-                        onImageClick = vm::showFullScreenImage
+                        onImageClick = vm::showFullScreenImage,
+                        onOpenUrl = onOpenUrl
                     )
                 }
             }
@@ -333,11 +343,13 @@ private fun CallConfirmDialog(
 @Composable
 private fun MessageBubble(
     message: SmsMessage,
-    onImageClick: (String) -> Unit = {}
+    onImageClick: (String) -> Unit = {},
+    onOpenUrl: (String) -> Unit = {}
 ) {
     val isOutgoing = message.direction == SmsDirection.OUTGOING
     val bubbleBg = if (isOutgoing) BrandViolet else Color(0xFF1E1E2E)
     val textColor = if (isOutgoing) Color.White else OnNight
+    val linkColor = if (isOutgoing) Color(0xFFCDB8FF) else BrandViolet
     val alignment = if (isOutgoing) Alignment.End else Alignment.Start
     val shape = if (isOutgoing) {
         RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)
@@ -347,6 +359,24 @@ private fun MessageBubble(
 
     val imageAttachments = message.attachments.filter { it.contentType.startsWith("image/") }
     val context = LocalContext.current
+
+    // Build annotated string with URL spans
+    val annotated = remember(message.body, linkColor) {
+        buildAnnotatedString {
+            var last = 0
+            URL_REGEX.findAll(message.body).forEach { match ->
+                append(message.body.substring(last, match.range.first))
+                pushStringAnnotation("URL", match.value)
+                pushStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline))
+                append(match.value)
+                pop()
+                pop()
+                last = match.range.last + 1
+            }
+            if (last < message.body.length) append(message.body.substring(last))
+        }
+    }
+    val hasLinks = URL_REGEX.containsMatchIn(message.body)
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -370,7 +400,7 @@ private fun MessageBubble(
             Spacer(Modifier.height(2.dp))
         }
 
-        // Text body (may be empty for image-only MMS)
+        // Text body — uses ClickableText when URLs are present
         if (message.body.isNotBlank()) {
             Box(
                 modifier = Modifier
@@ -379,12 +409,28 @@ private fun MessageBubble(
                     .background(bubbleBg)
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
-                Text(
-                    text = message.body,
-                    fontSize = 15.sp,
-                    color = textColor,
-                    lineHeight = 20.sp
-                )
+                if (hasLinks) {
+                    ClickableText(
+                        text = annotated,
+                        style = TextStyle(
+                            fontSize = 15.sp,
+                            color = textColor,
+                            lineHeight = 20.sp
+                        ),
+                        onClick = { offset: Int ->
+                            annotated.getStringAnnotations("URL", offset, offset)
+                                .firstOrNull()
+                                ?.let { ann -> onOpenUrl(ann.item) }
+                        }
+                    )
+                } else {
+                    Text(
+                        text = message.body,
+                        fontSize = 15.sp,
+                        color = textColor,
+                        lineHeight = 20.sp
+                    )
+                }
             }
         }
 
