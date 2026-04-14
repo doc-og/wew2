@@ -4,7 +4,10 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,7 +33,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -49,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -56,7 +62,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.wew.launcher.sms.SmsDirection
 import com.wew.launcher.sms.SmsMessage
 import com.wew.launcher.ui.theme.BrandViolet
@@ -90,8 +100,21 @@ fun ChatScreen(
     val state by vm.uiState.collectAsState()
     val listState = rememberLazyListState()
 
-    // Intercept system back — go to conversation list, not outside the launcher
-    BackHandler { onBack() }
+    // Photo picker — launched when user taps the attach button
+    val photoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            val mime = context.contentResolver.getType(it) ?: "image/jpeg"
+            vm.attachImage(it.toString(), mime)
+        }
+    }
+
+    // Intercept system back — dismiss full-screen viewer first, then go back
+    BackHandler {
+        if (state.fullScreenImageUri != null) vm.hideFullScreenImage()
+        else onBack()
+    }
 
     // Scroll to bottom whenever the message count changes
     LaunchedEffect(state.messages.size) {
@@ -121,6 +144,11 @@ fun ChatScreen(
             onConfirm = vm::confirmCall,
             onDismiss = vm::dismissCallConfirm
         )
+    }
+
+    // Full-screen image viewer
+    state.fullScreenImageUri?.let { uri ->
+        FullScreenImageViewer(uri = uri, onDismiss = vm::hideFullScreenImage)
     }
 
     Column(
@@ -168,7 +196,10 @@ fun ChatScreen(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 items(state.messages, key = { it.id }) { msg ->
-                    MessageBubble(message = msg)
+                    MessageBubble(
+                        message = msg,
+                        onImageClick = vm::showFullScreenImage
+                    )
                 }
             }
         }
@@ -177,8 +208,12 @@ fun ChatScreen(
             text = state.inputText,
             onTextChange = vm::onInputChange,
             onSend = vm::sendMessage,
+            onAttach = { photoPicker.launch("image/*") },
             isSending = state.isSending,
-            tokensExhausted = state.tokensExhausted
+            tokensExhausted = state.tokensExhausted,
+            attachedImageUri = state.attachedImageUri,
+            onClearAttachment = vm::clearAttachment,
+            isMms = state.attachedImageUri != null
         )
     }
 }
@@ -296,7 +331,10 @@ private fun CallConfirmDialog(
 // ── Message bubble ────────────────────────────────────────────────────────────
 
 @Composable
-private fun MessageBubble(message: SmsMessage) {
+private fun MessageBubble(
+    message: SmsMessage,
+    onImageClick: (String) -> Unit = {}
+) {
     val isOutgoing = message.direction == SmsDirection.OUTGOING
     val bubbleBg = if (isOutgoing) BrandViolet else Color(0xFF1E1E2E)
     val textColor = if (isOutgoing) Color.White else OnNight
@@ -307,24 +345,49 @@ private fun MessageBubble(message: SmsMessage) {
         RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp)
     }
 
+    val imageAttachments = message.attachments.filter { it.contentType.startsWith("image/") }
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = alignment
     ) {
-        Box(
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .clip(shape)
-                .background(bubbleBg)
-                .padding(horizontal = 14.dp, vertical = 8.dp)
-        ) {
-            Text(
-                text = message.body,
-                fontSize = 15.sp,
-                color = textColor,
-                lineHeight = 20.sp
+        // Image attachments (received MMS or sent MMS reflected back)
+        imageAttachments.forEach { attachment ->
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(attachment.contentUri)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Image",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .widthIn(max = 250.dp)
+                    .height(200.dp)
+                    .clip(shape)
+                    .clickable { onImageClick(attachment.contentUri) }
             )
+            Spacer(Modifier.height(2.dp))
         }
+
+        // Text body (may be empty for image-only MMS)
+        if (message.body.isNotBlank()) {
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .clip(shape)
+                    .background(bubbleBg)
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = message.body,
+                    fontSize = 15.sp,
+                    color = textColor,
+                    lineHeight = 20.sp
+                )
+            }
+        }
+
         Spacer(Modifier.height(1.dp))
         Text(
             text = formatBubbleTime(message.date),
@@ -342,10 +405,16 @@ private fun InputBar(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
+    onAttach: () -> Unit,
     isSending: Boolean,
-    tokensExhausted: Boolean
+    tokensExhausted: Boolean,
+    attachedImageUri: String?,
+    onClearAttachment: () -> Unit,
+    isMms: Boolean
 ) {
-    val canSend = text.isNotBlank() && !isSending && !tokensExhausted
+    val canSend = (text.isNotBlank() || attachedImageUri != null) && !isSending && !tokensExhausted
+    val tokenCost = if (isMms) "50" else "10"
+    val context = LocalContext.current
 
     Column {
         if (tokensExhausted) {
@@ -360,20 +429,70 @@ private fun InputBar(
             )
         }
 
+        // Attached image preview
+        if (attachedImageUri != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF13131F))
+                    .padding(start = 16.dp, end = 8.dp, top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(attachedImageUri)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = "Attached image",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "photo attached",
+                    fontSize = 13.sp,
+                    color = OnNight.copy(alpha = 0.6f),
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onClearAttachment) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Remove attachment",
+                        tint = OnNight.copy(alpha = 0.5f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color(0xFF13131F))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Bottom
         ) {
+            // Attach button
+            IconButton(onClick = onAttach, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    Icons.Default.AttachFile,
+                    contentDescription = "Attach image",
+                    tint = if (attachedImageUri != null) BrandViolet else OnNight.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(Modifier.width(4.dp))
+
             OutlinedTextField(
                 value = text,
                 onValueChange = onTextChange,
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
-                        text = "message",
+                        text = if (isMms) "add a caption…" else "message",
                         color = OnNight.copy(alpha = 0.35f),
                         fontSize = 15.sp
                     )
@@ -399,10 +518,10 @@ private fun InputBar(
 
             Spacer(Modifier.width(8.dp))
 
-            // Token cost label + send button
+            // Token cost + send button
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "10",
+                    text = tokenCost,
                     fontSize = 10.sp,
                     color = if (tokensExhausted) WarningAmber else BrandViolet.copy(alpha = 0.7f)
                 )
@@ -430,6 +549,34 @@ private fun InputBar(
                     }
                 }
             }
+        }
+    }
+}
+
+// ── Full-screen image viewer ──────────────────────────────────────────────────
+
+@Composable
+private fun FullScreenImageViewer(uri: String, onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.92f))
+                .clickable { onDismiss() },
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(uri)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = "Full screen image",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }

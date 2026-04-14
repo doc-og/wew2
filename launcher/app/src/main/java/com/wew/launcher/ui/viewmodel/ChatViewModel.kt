@@ -32,7 +32,13 @@ data class ChatUiState(
     /** Show call-confirmation dialog. */
     val showCallConfirm: Boolean = false,
     /** Set to the address to dial; UI observes and launches the intent, then clears. */
-    val pendingCall: String? = null
+    val pendingCall: String? = null,
+    /** Content URI of an image the user has staged to attach to the next message. */
+    val attachedImageUri: String? = null,
+    /** MIME type of [attachedImageUri], resolved at attach time. */
+    val attachedImageMime: String = "image/jpeg",
+    /** URI to display in the full-screen image viewer; null = viewer closed. */
+    val fullScreenImageUri: String? = null
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -117,33 +123,51 @@ class ChatViewModel(
     fun sendMessage() {
         val state = _uiState.value
         val text = state.inputText.trim()
-        if (text.isEmpty() || state.isSending || state.tokensExhausted) return
+        val hasImage = state.attachedImageUri != null
+        if ((text.isEmpty() && !hasImage) || state.isSending || state.tokensExhausted) return
         val deviceId = prefs.getString("device_id", null) ?: return
 
-        _uiState.update { it.copy(isSending = true, inputText = "") }
+        val isMms = hasImage
+        val tokenCost = if (isMms) 50 else 10
+        val actionType = if (isMms) ActionType.MMS_SENT.value else ActionType.SMS_SENT.value
+
+        _uiState.update { it.copy(isSending = true, inputText = "", attachedImageUri = null) }
 
         viewModelScope.launch {
-            // Deduct tokens before sending — if the balance is insufficient, abort.
             val tokenResult = repo.consumeTokens(
                 deviceId = deviceId,
-                amount = 10,
-                actionType = ActionType.SMS_SENT.value,
+                amount = tokenCost,
+                actionType = actionType,
                 appPackage = null,
                 appName = "Messages"
             )
             if (tokenResult.isFailure) {
-                _uiState.update { it.copy(isSending = false, inputText = text, tokensExhausted = true) }
+                _uiState.update {
+                    it.copy(
+                        isSending = false,
+                        inputText = text,
+                        attachedImageUri = state.attachedImageUri,
+                        tokensExhausted = true
+                    )
+                }
                 return@launch
             }
 
-            smsRepo.sendSms(to = recipientAddress, body = text)
+            if (isMms) {
+                smsRepo.sendMms(
+                    to = recipientAddress,
+                    body = text,
+                    imageUri = state.attachedImageUri,
+                    imageMimeType = state.attachedImageMime
+                )
+            } else {
+                smsRepo.sendSms(to = recipientAddress, body = text)
+            }
 
-            // Resolve real thread ID if this was a new conversation
             if (currentThreadId == -1L) {
                 currentThreadId = smsRepo.getThreadIdForAddress(recipientAddress)
             }
 
-            // Reload messages + refresh token balance
             runCatching {
                 val messages = if (currentThreadId != -1L)
                     smsRepo.getMessages(currentThreadId)
@@ -163,6 +187,22 @@ class ChatViewModel(
             }
         }
     }
+
+    // ── Attachment ────────────────────────────────────────────────────────────
+
+    fun attachImage(uri: String, mimeType: String) =
+        _uiState.update { it.copy(attachedImageUri = uri, attachedImageMime = mimeType) }
+
+    fun clearAttachment() =
+        _uiState.update { it.copy(attachedImageUri = null) }
+
+    // ── Full-screen viewer ────────────────────────────────────────────────────
+
+    fun showFullScreenImage(uri: String) =
+        _uiState.update { it.copy(fullScreenImageUri = uri) }
+
+    fun hideFullScreenImage() =
+        _uiState.update { it.copy(fullScreenImageUri = null) }
 
     // ── Call ──────────────────────────────────────────────────────────────────
 

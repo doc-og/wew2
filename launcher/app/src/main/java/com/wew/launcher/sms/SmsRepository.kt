@@ -240,16 +240,32 @@ class SmsRepository(private val context: Context) {
     }
 
     /**
-     * Send an MMS using Android's built-in SmsManager.sendMultimediaMessage() (API 21+).
-     * [attachmentUris] are content:// URIs of images/videos to attach.
+     * Send an MMS with an optional single image attachment.
      *
-     * Builds a minimal SMIL MMS PDU, writes it to a temp file, then hands off
-     * to the system MMS service which handles APN selection and MMSC submission.
+     * Builds a WAP MMS m-send-req PDU via [MmsPduBuilder], writes it to a
+     * cache temp file, and hands off to SmsManager which handles APN selection
+     * and MMSC submission.
+     *
+     * @param imageUri content:// or file:// URI of the image to attach, or null for text-only MMS.
+     * @param imageMimeType MIME type of the image (e.g. "image/jpeg").
      */
     @Suppress("DEPRECATION")
-    fun sendMms(to: String, body: String, attachmentUris: List<String>) {
+    suspend fun sendMms(
+        to: String,
+        body: String,
+        imageUri: String? = null,
+        imageMimeType: String = "image/jpeg"
+    ) = withContext(Dispatchers.IO) {
         runCatching {
-            val pdu = buildMmsPdu(to, body, attachmentUris)
+            val imageBytes = imageUri?.let { readBytesFromUri(it) }
+            val pdu = MmsPduBuilder.build(
+                to = to,
+                text = body.ifBlank { null },
+                imageBytes = imageBytes,
+                imageMimeType = imageMimeType
+            )
+            Log.d("SmsRepo", "sendMms: PDU ${pdu.size} bytes, imageBytes=${imageBytes?.size ?: 0}")
+
             val tempFile = java.io.File(context.cacheDir, "mms_out_${System.currentTimeMillis()}.pdu")
             tempFile.writeBytes(pdu)
             val tempUri = Uri.fromFile(tempFile)
@@ -264,19 +280,12 @@ class SmsRepository(private val context: Context) {
     }
 
     /**
-     * Builds a minimal SMIL/MMS PDU byte array for outbound MMS.
-     * This is a simplified implementation covering single-image + text.
-     * Carrier-specific encoding issues may require a full MMS library for edge cases.
+     * Read all bytes from a content:// or file:// URI.
+     * Returns null if the URI is unreadable.
      */
-    private fun buildMmsPdu(to: String, body: String, attachmentUris: List<String>): ByteArray {
-        // Use Android's MMS PDU builder via ContentValues if available,
-        // otherwise fall back to a raw byte construction.
-        // For now we return a placeholder; full PDU encoding is a separate concern.
-        // The system sendMultimediaMessage() will handle the encoding when given
-        // a properly structured content:// URI pointing to an MMS draft.
-        Log.d("SmsRepo", "buildMmsPdu: to=$to, body=${body.length} chars, attachments=${attachmentUris.size}")
-        return ByteArray(0)   // placeholder — caller should use MMS ContentProvider draft instead
-    }
+    fun readBytesFromUri(uriStr: String): ByteArray? = runCatching {
+        context.contentResolver.openInputStream(Uri.parse(uriStr))?.use { it.readBytes() }
+    }.onFailure { Log.e("SmsRepo", "readBytesFromUri failed: ${it.message}") }.getOrElse { null }
 
     // ── Thread management ─────────────────────────────────────────────────────
 
