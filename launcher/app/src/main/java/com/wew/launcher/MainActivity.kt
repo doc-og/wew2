@@ -25,12 +25,12 @@ import com.wew.launcher.service.LauncherForegroundService
 import com.wew.launcher.service.WewDeviceAdminReceiver
 import com.wew.launcher.ui.screen.CheckInScreen
 import com.wew.launcher.ui.screen.ContactsScreen
-import com.wew.launcher.ui.screen.HomeScreen
+import com.wew.launcher.ui.screen.ConversationListScreen
 import com.wew.launcher.ui.screen.SetupActivity
 import com.wew.launcher.ui.theme.WewLauncherTheme
 import com.wew.launcher.ui.viewmodel.CheckInViewModel
 import com.wew.launcher.ui.viewmodel.ContactsViewModel
-import com.wew.launcher.ui.viewmodel.HomeViewModel
+import com.wew.launcher.ui.viewmodel.ConversationListViewModel
 
 class MainActivity : ComponentActivity() {
 
@@ -41,7 +41,6 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        // Whether granted or not, start the service — it handles the partial state
         startForegroundService()
     }
 
@@ -62,31 +61,23 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             WewLauncherTheme {
-                val viewModel: HomeViewModel = viewModel()
+                val conversationListViewModel: ConversationListViewModel = viewModel()
                 val contactsViewModel: ContactsViewModel = viewModel()
                 val checkInViewModel: CheckInViewModel = viewModel()
-                // Keep a reference so onResume can trigger a whitelist refresh
-                activeViewModel = viewModel
 
                 var showContacts by remember { mutableStateOf(false) }
                 var showCheckIn by remember { mutableStateOf(false) }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    HomeScreen(
-                        viewModel = viewModel,
-                        onSosClick = { launchEmergencyCall() },
-                        onAppClick = { app ->
-                            when (app.packageName) {
-                                "com.wew.launcher.contacts" -> showContacts = true
-                                "com.wew.launcher.checkin" -> {
-                                    checkInViewModel.reset()
-                                    showCheckIn = true
-                                }
-                                else -> {
-                                    val launchIntent = packageManager.getLaunchIntentForPackage(app.packageName)
-                                    if (launchIntent != null) startActivity(launchIntent)
-                                }
-                            }
+                    ConversationListScreen(
+                        viewModel = conversationListViewModel,
+                        onOpenThread = { threadId ->
+                            // TODO PR 4: navigate to ChatScreen(threadId)
+                        },
+                        onOpenContacts = { showContacts = true },
+                        onOpenCheckIn = {
+                            checkInViewModel.reset()
+                            showCheckIn = true
                         }
                     )
 
@@ -108,20 +99,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private var activeViewModel: HomeViewModel? = null
-
     override fun onResume() {
         super.onResume()
-        activeViewModel?.refreshApps()
+        // Conversations auto-refresh via ContentObserver
     }
 
     private fun requestPermissionsThenStartService() {
         val needed = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.READ_SMS,
+            Manifest.permission.RECEIVE_SMS,
         ).apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.POST_NOTIFICATIONS)
+                add(Manifest.permission.READ_MEDIA_IMAGES)
+                add(Manifest.permission.READ_MEDIA_VIDEO)
             }
         }
 
@@ -149,12 +142,5 @@ class MainActivity : ComponentActivity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         // Intentionally swallowed — launcher must stay as home screen
-    }
-
-    private fun launchEmergencyCall() {
-        val intent = Intent(Intent.ACTION_DIAL).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        startActivity(intent)
     }
 }
