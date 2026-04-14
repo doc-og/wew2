@@ -81,3 +81,11 @@ data class NotificationConfig(
     @SerialName("notify_tamper_attempts") val notifyTamperAttempts: Boolean = true,
     @SerialName("notify_location_updates") val notifyLocationUpdates: Boolean = false
 )
+
+@Serializable
+data class DevicePasscode(
+    @SerialName("device_id") val deviceId: String,
+    @SerialName("passcode_hash") val passcodeHash: String,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("updated_at") val updatedAt: String? = null
+)

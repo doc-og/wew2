@@ -29,6 +29,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -71,6 +74,15 @@ fun HomeScreen(
     onAppClick: (AppInfo) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Show access denied snackbar
+    LaunchedEffect(uiState.showAccessDeniedSnackbar) {
+        if (uiState.showAccessDeniedSnackbar) {
+            snackbarHostState.showSnackbar("access denied — ask your parent")
+            viewModel.onAccessDeniedSnackbarShown()
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -102,6 +114,7 @@ fun HomeScreen(
             } else {
                 AppGrid(
                     apps = uiState.apps,
+                    appsWithNotifications = uiState.appsWithNotifications,
                     onAppClick = { app ->
                         viewModel.onAppClicked(app)
                         onAppClick(app)
@@ -121,6 +134,33 @@ fun HomeScreen(
                     .background(Night.copy(alpha = 0.6f))
             )
         }
+
+        // Snackbar for access denied
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 96.dp)
+        )
+    }
+
+    // Passcode dialog
+    if (uiState.showPasscodeDialog && uiState.pendingUnauthorizedApp != null) {
+        PasscodeDialog(
+            appName = uiState.pendingUnauthorizedApp!!.appName,
+            attemptsLeft = uiState.passcodeAttemptsLeft,
+            onPinSubmit = { pin -> viewModel.onPasscodeSubmitted(pin) },
+            onDismiss = { viewModel.onPasscodeDismissed() }
+        )
+    }
+
+    // Time selection dialog
+    if (uiState.showTimeSelectionDialog && uiState.pendingUnauthorizedApp != null) {
+        TimeSelectionDialog(
+            appName = uiState.pendingUnauthorizedApp!!.appName,
+            onTimeSelected = { minutes -> viewModel.onTimeSelected(minutes) },
+            onDismiss = { viewModel.onPasscodeDismissed() }
+        )
     }
 }
 
@@ -211,6 +251,7 @@ private fun TopBar(credits: Int, dailyBudget: Int) {
 @Composable
 private fun AppGrid(
     apps: List<AppInfo>,
+    appsWithNotifications: Set<String>,
     onAppClick: (AppInfo) -> Unit,
     onSosClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -223,7 +264,11 @@ private fun AppGrid(
         modifier = modifier
     ) {
         items(apps, key = { it.packageName }) { app ->
-            AppIconItem(app = app, onClick = { onAppClick(app) })
+            AppIconItem(
+                app = app,
+                hasNotification = app.packageName in appsWithNotifications,
+                onClick = { onAppClick(app) }
+            )
         }
         // SOS tile is always the last item in the grid
         item(key = "sos_tile") {
@@ -233,7 +278,11 @@ private fun AppGrid(
 }
 
 @Composable
-private fun AppIconItem(app: AppInfo, onClick: () -> Unit) {
+private fun AppIconItem(
+    app: AppInfo,
+    hasNotification: Boolean,
+    onClick: () -> Unit
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
@@ -270,21 +319,21 @@ private fun AppIconItem(app: AppInfo, onClick: () -> Unit) {
                 modifier = Modifier.size(32.dp)
             )
 
-            // Credit cost badge
-            if (app.creditCost > 0) {
+            // Notification dot — shown only when there is a pending unread notification
+            if (hasNotification) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .size(16.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(ElectricViolet),
+                        .align(Alignment.TopEnd)
+                        .size(12.dp)
+                        .clip(CircleShape)
+                        .background(Color.White),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = app.creditCost.toString(),
-                        fontSize = 8.sp,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF4A90E2))
                     )
                 }
             }

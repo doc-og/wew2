@@ -39,6 +39,13 @@ class WewFcmService : FirebaseMessagingService() {
             "location_update" -> {
                 "location updated" to "your child's location has been refreshed"
             }
+            "check_in" -> {
+                val title = message.notification?.title ?: "📍 Child checked in"
+                val body = message.notification?.body
+                    ?: message.data["message"]?.takeIf { it.isNotBlank() }
+                    ?: "your child shared their location"
+                title to body
+            }
             else -> return
         }
         showNotification(type.hashCode(), title, body)

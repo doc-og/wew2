@@ -904,6 +904,10 @@ private fun activityDisplayFor(entry: ActivityLogEntry): ActivityDisplay =
             Icons.Default.LockOpen, SafetyGreen,
             "Device unlocked"
         )
+        "check_in" -> ActivityDisplay(
+            Icons.Default.Share, Color(0xFF4A90E2),
+            "Checked in with parent 📍"
+        )
         else -> ActivityDisplay(
             Icons.Default.AccessTime, Color(0xFF9999AA),
             entry.actionType.replace("_", " ").replaceFirstChar { it.uppercaseChar() }

@@ -3,14 +3,19 @@ package com.wew.launcher.data.repository
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import com.wew.launcher.data.SupabaseClient
 import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.AppRecord
 import com.wew.launcher.data.model.AppSyncRecord
+import com.wew.launcher.data.model.ContactAuthRequest
 import com.wew.launcher.data.model.CreditLedger
 import com.wew.launcher.data.model.Device
+import com.wew.launcher.data.model.DevicePasscodeRecord
 import com.wew.launcher.data.model.LocationLog
 import com.wew.launcher.data.model.Schedule
+import com.wew.launcher.data.model.TempAppAccess
+import com.wew.launcher.data.model.WewContact
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.realtime.channel
@@ -150,6 +155,102 @@ class DeviceRepository(private val context: Context) {
         emit(getDevice(deviceId))
     }
 
+    suspend fun getDevicePasscode(deviceId: String): DevicePasscodeRecord? {
+        return runCatching {
+            supabase.postgrest["device_passcode"]
+                .select(Columns.ALL) { filter { eq("device_id", deviceId) } }
+                .decodeList<DevicePasscodeRecord>()
+                .firstOrNull()
+        }.getOrElse { Log.e("WewSync", "getDevicePasscode failed: ${it.message}"); null }
+    }
+
+    suspend fun grantTempAccess(deviceId: String, packageName: String, expiresAt: String) {
+        supabase.postgrest["temporary_app_access"].upsert(
+            buildJsonObject {
+                put("device_id", deviceId)
+                put("package_name", packageName)
+                put("expires_at", expiresAt)
+                put("granted_by", "passcode")
+            },
+            onConflict = "device_id,package_name"
+        )
+    }
+
+    suspend fun getActiveTempAccess(deviceId: String): List<TempAppAccess> {
+        return runCatching {
+            supabase.postgrest["temporary_app_access"]
+                .select(Columns.ALL) { filter { eq("device_id", deviceId) } }
+                .decodeList<TempAppAccess>()
+        }.getOrElse { Log.e("WewSync", "getTempAccess failed: ${it.message}"); emptyList() }
+    }
+
+    // ── Contacts ──────────────────────────────────────────────────────────────────
+
+    suspend fun getContacts(deviceId: String): List<WewContact> {
+        return runCatching {
+            supabase.postgrest["contacts"]
+                .select(Columns.ALL) { filter { eq("device_id", deviceId) } }
+                .decodeList()
+        }.getOrElse { Log.e("WewContacts", "getContacts failed: ${it.message}"); emptyList() }
+    }
+
+    suspend fun createContact(
+        deviceId: String,
+        name: String,
+        phone: String?,
+        email: String?,
+        address: String?,
+        photoUrl: String?,
+        notes: String?
+    ): String? {
+        return runCatching {
+            supabase.postgrest["contacts"].insert(
+                buildJsonObject {
+                    put("device_id", deviceId)
+                    put("name", name)
+                    phone?.let { put("phone", it) }
+                    email?.let { put("email", it) }
+                    address?.let { put("address", it) }
+                    photoUrl?.let { put("photo_url", it) }
+                    notes?.let { put("notes", it) }
+                    put("is_authorized", false)
+                }
+            )
+            // Fetch the contact we just created to get its id
+            supabase.postgrest["contacts"]
+                .select(Columns.ALL) {
+                    filter {
+                        eq("device_id", deviceId)
+                        eq("name", name)
+                    }
+                }
+                .decodeList<WewContact>()
+                .maxByOrNull { it.createdAt ?: "" }
+                ?.id
+        }.getOrElse { Log.e("WewContacts", "createContact failed: ${it.message}"); null }
+    }
+
+    suspend fun requestContactAuthorization(deviceId: String, contactId: String) {
+        runCatching {
+            supabase.postgrest["contact_auth_requests"].upsert(
+                buildJsonObject {
+                    put("device_id", deviceId)
+                    put("contact_id", contactId)
+                    put("status", "pending")
+                },
+                onConflict = "device_id,contact_id"
+            )
+        }.onFailure { Log.e("WewContacts", "requestAuth failed: ${it.message}") }
+    }
+
+    suspend fun getAuthRequests(deviceId: String): List<ContactAuthRequest> {
+        return runCatching {
+            supabase.postgrest["contact_auth_requests"]
+                .select(Columns.ALL) { filter { eq("device_id", deviceId) } }
+                .decodeList()
+        }.getOrElse { Log.e("WewContacts", "getAuthRequests failed: ${it.message}"); emptyList() }
+    }
+
     companion object {
         val DEFAULT_WHITELIST = setOf(
             "com.android.dialer",
@@ -159,7 +260,8 @@ class DeviceRepository(private val context: Context) {
             "com.android.contacts",
             "com.google.android.contacts",
             "com.google.android.apps.maps",
-            "com.wew.parent"
+            "com.wew.parent",
+            "com.wew.launcher.contacts"
         )
     }
 }

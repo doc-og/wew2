@@ -12,15 +12,23 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wew.launcher.service.LauncherForegroundService
 import com.wew.launcher.service.WewDeviceAdminReceiver
+import com.wew.launcher.ui.screen.CheckInScreen
+import com.wew.launcher.ui.screen.ContactsScreen
 import com.wew.launcher.ui.screen.HomeScreen
 import com.wew.launcher.ui.screen.SetupActivity
 import com.wew.launcher.ui.theme.WewLauncherTheme
+import com.wew.launcher.ui.viewmodel.CheckInViewModel
+import com.wew.launcher.ui.viewmodel.ContactsViewModel
 import com.wew.launcher.ui.viewmodel.HomeViewModel
 
 class MainActivity : ComponentActivity() {
@@ -54,16 +62,47 @@ class MainActivity : ComponentActivity() {
         setContent {
             WewLauncherTheme {
                 val viewModel: HomeViewModel = viewModel()
+                val contactsViewModel: ContactsViewModel = viewModel()
+                val checkInViewModel: CheckInViewModel = viewModel()
                 // Keep a reference so onResume can trigger a whitelist refresh
                 activeViewModel = viewModel
-                HomeScreen(
-                    viewModel = viewModel,
-                    onSosClick = { launchEmergencyCall() },
-                    onAppClick = { app ->
-                        val launchIntent = packageManager.getLaunchIntentForPackage(app.packageName)
-                        if (launchIntent != null) startActivity(launchIntent)
+
+                var showContacts by remember { mutableStateOf(false) }
+                var showCheckIn by remember { mutableStateOf(false) }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    HomeScreen(
+                        viewModel = viewModel,
+                        onSosClick = { launchEmergencyCall() },
+                        onAppClick = { app ->
+                            when (app.packageName) {
+                                "com.wew.launcher.contacts" -> showContacts = true
+                                "com.wew.launcher.checkin" -> {
+                                    checkInViewModel.reset()
+                                    showCheckIn = true
+                                }
+                                else -> {
+                                    val launchIntent = packageManager.getLaunchIntentForPackage(app.packageName)
+                                    if (launchIntent != null) startActivity(launchIntent)
+                                }
+                            }
+                        }
+                    )
+
+                    if (showContacts) {
+                        ContactsScreen(
+                            viewModel = contactsViewModel,
+                            onBack = { showContacts = false }
+                        )
                     }
-                )
+
+                    if (showCheckIn) {
+                        CheckInScreen(
+                            viewModel = checkInViewModel,
+                            onClose = { showCheckIn = false }
+                        )
+                    }
+                }
             }
         }
     }

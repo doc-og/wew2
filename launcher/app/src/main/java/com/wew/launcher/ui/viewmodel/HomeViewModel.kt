@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wew.launcher.credit.CreditEngine
 import com.wew.launcher.data.model.ActionType
+import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.AppInfo
 import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.service.LauncherForegroundService
@@ -20,6 +21,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import android.util.Log
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 
 data class HomeUiState(
     val apps: List<AppInfo> = emptyList(),
@@ -28,7 +32,15 @@ data class HomeUiState(
     val isLocked: Boolean = false,
     val creditsExhausted: Boolean = false,
     val isLoading: Boolean = true,
-    val deviceId: String = ""
+    val deviceId: String = "",
+    val appsWithNotifications: Set<String> = emptySet(),
+    val pendingUnauthorizedApp: AppInfo? = null,
+    val showPasscodeDialog: Boolean = false,
+    val passcodeAttemptsLeft: Int = 3,
+    val showTimeSelectionDialog: Boolean = false,
+    val passcodeHash: String? = null,
+    val showAccessDeniedSnackbar: Boolean = false,
+    val activeTempAccess: Map<String, String> = emptyMap()
 )
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
@@ -75,15 +87,24 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         creditCost = record.creditCost
                     )
                 }
+                val passcode = repo.getDevicePasscode(deviceId)
+                val tempAccess = repo.getActiveTempAccess(deviceId)
+                val tempAccessMap = tempAccess.associate { it.packageName to it.expiresAt }
+                val syntheticApps = listOf(
+                    AppInfo("com.wew.launcher.contacts", "Contacts", null, true, 0),
+                    AppInfo("com.wew.launcher.checkin", "Check In", null, true, 0)
+                )
                 _uiState.update {
                     it.copy(
-                        apps = appInfoList,
+                        apps = appInfoList + syntheticApps,
                         currentCredits = device.currentCredits,
                         dailyBudget = device.dailyCreditBudget,
                         isLocked = device.isLocked,
                         creditsExhausted = device.currentCredits <= 0,
                         isLoading = false,
-                        deviceId = deviceId
+                        deviceId = deviceId,
+                        passcodeHash = passcode?.passcodeHash,
+                        activeTempAccess = tempAccessMap
                     )
                 }
                 // Continuously poll for whitelist changes every 30 seconds so
@@ -115,13 +136,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             creditCost = record.creditCost
                         )
                     }
+                    val tempAccess = repo.getActiveTempAccess(deviceId)
+                    val tempAccessMap = tempAccess.associate { it.packageName to it.expiresAt }
+                    val syntheticApps = listOf(
+                        AppInfo("com.wew.launcher.contacts", "Contacts", null, true, 0),
+                        AppInfo("com.wew.launcher.checkin", "Check In", null, true, 0)
+                    )
                     _uiState.update {
                         it.copy(
-                            apps = appInfoList,
+                            apps = appInfoList + syntheticApps,
                             currentCredits = device.currentCredits,
                             dailyBudget = device.dailyCreditBudget,
                             isLocked = device.isLocked,
-                            creditsExhausted = device.currentCredits <= 0
+                            creditsExhausted = device.currentCredits <= 0,
+                            activeTempAccess = tempAccessMap
                         )
                     }
                 }.onFailure {
@@ -152,7 +180,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             .sortedBy { it.appName.lowercase() }
-        _uiState.update { it.copy(apps = apps, isLoading = false) }
+        val syntheticApps = listOf(
+            AppInfo("com.wew.launcher.contacts", "Contacts", null, true, 0),
+            AppInfo("com.wew.launcher.checkin", "Check In", null, true, 0)
+        )
+        _uiState.update { it.copy(apps = apps + syntheticApps, isLoading = false) }
     }
 
     /** Called from MainActivity.onResume — re-fetches the whitelist so toggling an app
@@ -173,7 +205,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         creditCost = record.creditCost
                     )
                 }
-                _uiState.update { it.copy(apps = appInfoList) }
+                val syntheticApps = listOf(
+                    AppInfo("com.wew.launcher.contacts", "Contacts", null, true, 0),
+                    AppInfo("com.wew.launcher.checkin", "Check In", null, true, 0)
+                )
+                _uiState.update { it.copy(apps = appInfoList + syntheticApps) }
             }.onFailure {
                 Log.e("WewSync", "refreshApps failed: ${it.message}")
             }
@@ -183,6 +219,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun onAppClicked(app: AppInfo) {
         val state = _uiState.value
         if (state.creditsExhausted) return
+
+        // Check if app is whitelisted OR has active temp access
+        val tempExpiry = state.activeTempAccess[app.packageName]
+        val hasValidTempAccess = tempExpiry != null &&
+            Instant.parse(tempExpiry).isAfter(Instant.now())
+
+        if (!app.isWhitelisted && !hasValidTempAccess) {
+            onUnauthorizedAppTapped(app)
+            return
+        }
 
         val actionType = resolveActionType(app.packageName)
         val result = CreditEngine.deduct(
@@ -196,7 +242,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update {
                 it.copy(
                     currentCredits = result.newBalance,
-                    creditsExhausted = result.newBalance <= 0
+                    creditsExhausted = result.newBalance <= 0,
+                    appsWithNotifications = it.appsWithNotifications - app.packageName
                 )
             }
             viewModelScope.launch {
@@ -209,6 +256,153 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+    }
+
+    fun onUnauthorizedAppTapped(app: AppInfo) {
+        _uiState.update {
+            it.copy(
+                pendingUnauthorizedApp = app,
+                showPasscodeDialog = true,
+                passcodeAttemptsLeft = 3
+            )
+        }
+    }
+
+    fun onPasscodeSubmitted(pin: String) {
+        val state = _uiState.value
+        val deviceId = state.deviceId
+        val storedHash = state.passcodeHash
+
+        if (storedHash == null) {
+            // No passcode configured — deny access
+            _uiState.update {
+                it.copy(
+                    showPasscodeDialog = false,
+                    pendingUnauthorizedApp = null,
+                    showAccessDeniedSnackbar = true
+                )
+            }
+            return
+        }
+
+        val computedHash = hashPin(deviceId, pin)
+        if (computedHash == storedHash) {
+            // Correct passcode — proceed to time selection
+            _uiState.update {
+                it.copy(
+                    showPasscodeDialog = false,
+                    showTimeSelectionDialog = true
+                )
+            }
+        } else {
+            val attemptsLeft = state.passcodeAttemptsLeft - 1
+            if (attemptsLeft <= 0) {
+                // All attempts exhausted
+                val blockedApp = state.pendingUnauthorizedApp
+                _uiState.update {
+                    it.copy(
+                        showPasscodeDialog = false,
+                        pendingUnauthorizedApp = null,
+                        passcodeAttemptsLeft = 3,
+                        showAccessDeniedSnackbar = true
+                    )
+                }
+                // Log the block event
+                if (blockedApp != null && deviceId.isNotEmpty()) {
+                    viewModelScope.launch {
+                        runCatching {
+                            repo.logActivity(
+                                ActivityLog(
+                                    deviceId = deviceId,
+                                    actionType = ActionType.APP_BLOCKED.value,
+                                    appPackage = blockedApp.packageName,
+                                    appName = blockedApp.appName,
+                                    creditsDeducted = 0
+                                )
+                            )
+                        }.onFailure {
+                            Log.e("WewSync", "logActivity app_blocked failed: ${it.message}")
+                        }
+                    }
+                }
+            } else {
+                _uiState.update { it.copy(passcodeAttemptsLeft = attemptsLeft) }
+            }
+        }
+    }
+
+    fun onPasscodeDismissed() {
+        _uiState.update {
+            it.copy(
+                showPasscodeDialog = false,
+                showTimeSelectionDialog = false,
+                pendingUnauthorizedApp = null,
+                passcodeAttemptsLeft = 3
+            )
+        }
+    }
+
+    fun onAccessDeniedSnackbarShown() {
+        _uiState.update { it.copy(showAccessDeniedSnackbar = false) }
+    }
+
+    fun onTimeSelected(durationMinutes: Int) {
+        val state = _uiState.value
+        val app = state.pendingUnauthorizedApp ?: return
+        val deviceId = state.deviceId
+
+        val expiresAt = if (durationMinutes == -1) {
+            // Rest of day — use 11:59 PM today (simplified; production would check schedule)
+            val endOfDay = java.time.LocalDate.now()
+                .atTime(23, 59, 0)
+                .toInstant(ZoneOffset.UTC)
+            DateTimeFormatter.ISO_INSTANT.format(endOfDay)
+        } else {
+            val expiry = Instant.now().plusSeconds(durationMinutes * 60L)
+            DateTimeFormatter.ISO_INSTANT.format(expiry)
+        }
+
+        _uiState.update {
+            it.copy(
+                showTimeSelectionDialog = false,
+                pendingUnauthorizedApp = null,
+                activeTempAccess = it.activeTempAccess + (app.packageName to expiresAt)
+            )
+        }
+
+        viewModelScope.launch {
+            runCatching {
+                repo.grantTempAccess(deviceId, app.packageName, expiresAt)
+                repo.deductCredits(
+                    deviceId = deviceId,
+                    amount = ActionType.TEMP_ACCESS_GRANTED.baseCost,
+                    actionType = ActionType.TEMP_ACCESS_GRANTED.value,
+                    appPackage = app.packageName,
+                    appName = app.appName
+                )
+                _uiState.update {
+                    it.copy(
+                        currentCredits = maxOf(0, it.currentCredits - ActionType.TEMP_ACCESS_GRANTED.baseCost),
+                        creditsExhausted = (it.currentCredits - ActionType.TEMP_ACCESS_GRANTED.baseCost) <= 0
+                    )
+                }
+            }.onFailure {
+                Log.e("WewSync", "grantTempAccess failed: ${it.message}")
+            }
+        }
+    }
+
+    /** For testing / FCM: mark an app as having a pending notification. */
+    fun markAppNotification(packageName: String) {
+        _uiState.update {
+            it.copy(appsWithNotifications = it.appsWithNotifications + packageName)
+        }
+    }
+
+    private fun hashPin(deviceId: String, pin: String): String {
+        val input = "$deviceId$pin"
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        return digest.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
     private fun resolveActionType(packageName: String): ActionType {
