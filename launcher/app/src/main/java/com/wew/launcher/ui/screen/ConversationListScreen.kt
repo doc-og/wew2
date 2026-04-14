@@ -71,7 +71,7 @@ import java.util.Locale
 @Composable
 fun ConversationListScreen(
     viewModel: ConversationListViewModel,
-    onOpenThread: (Long) -> Unit,
+    onOpenThread: (threadId: Long, address: String, displayName: String) -> Unit,
     onOpenContacts: () -> Unit,
     onOpenCheckIn: () -> Unit
 ) {
@@ -114,7 +114,7 @@ fun ConversationListScreen(
                         items(state.pinned, key = { it.thread.threadId }) { item ->
                             ThreadRow(
                                 item = item,
-                                onClick = { onOpenThread(item.thread.threadId) },
+                                onClick = { onOpenThread(item.thread.threadId, item.thread.address, item.resolvedName) },
                                 onLongPress = { viewModel.onLongPress(item) }
                             )
                         }
@@ -125,7 +125,7 @@ fun ConversationListScreen(
                     items(state.conversations, key = { it.thread.threadId }) { item ->
                         ThreadRow(
                             item = item,
-                            onClick = { onOpenThread(item.thread.threadId) },
+                            onClick = { onOpenThread(item.thread.threadId, item.thread.address, item.resolvedName) },
                             onLongPress = { viewModel.onLongPress(item) }
                         )
                     }
@@ -219,11 +219,10 @@ fun ConversationListScreen(
                 approvedContacts = state.approvedContacts,
                 onSelectContact = { contact ->
                     viewModel.hideNewConversation()
-                    val threadId = contact.phone?.let {
-                        com.wew.launcher.sms.SmsRepository(context)
-                            .getThreadIdForAddress(it)
-                    } ?: -1L
-                    if (threadId != -1L) onOpenThread(threadId)
+                    val address = contact.phone ?: return@NewConversationSheet
+                    val threadId = com.wew.launcher.sms.SmsRepository(context)
+                        .getThreadIdForAddress(address)
+                    onOpenThread(threadId, address, contact.name)
                 }
             )
         }

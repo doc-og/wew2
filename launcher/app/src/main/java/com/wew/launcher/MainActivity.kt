@@ -12,7 +12,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,6 +22,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wew.launcher.service.LauncherForegroundService
 import com.wew.launcher.service.WewDeviceAdminReceiver
+import com.wew.launcher.ui.screen.ChatScreen
 import com.wew.launcher.ui.screen.CheckInScreen
 import com.wew.launcher.ui.screen.ContactsScreen
 import com.wew.launcher.ui.screen.ConversationListScreen
@@ -31,6 +31,19 @@ import com.wew.launcher.ui.theme.WewLauncherTheme
 import com.wew.launcher.ui.viewmodel.CheckInViewModel
 import com.wew.launcher.ui.viewmodel.ContactsViewModel
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
+
+// ── Navigation state ──────────────────────────────────────────────────────────
+
+private sealed class WewScreen {
+    object ConversationList : WewScreen()
+    data class Chat(
+        val threadId: Long,
+        val address: String,
+        val displayName: String
+    ) : WewScreen()
+}
+
+// ── Activity ──────────────────────────────────────────────────────────────────
 
 class MainActivity : ComponentActivity() {
 
@@ -61,47 +74,54 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             WewLauncherTheme {
-                val conversationListViewModel: ConversationListViewModel = viewModel()
+                val convListViewModel: ConversationListViewModel = viewModel()
                 val contactsViewModel: ContactsViewModel = viewModel()
                 val checkInViewModel: CheckInViewModel = viewModel()
 
+                var screen by remember { mutableStateOf<WewScreen>(WewScreen.ConversationList) }
                 var showContacts by remember { mutableStateOf(false) }
                 var showCheckIn by remember { mutableStateOf(false) }
 
-                Box(modifier = Modifier.fillMaxSize()) {
-                    ConversationListScreen(
-                        viewModel = conversationListViewModel,
-                        onOpenThread = { threadId ->
-                            // TODO PR 4: navigate to ChatScreen(threadId)
-                        },
-                        onOpenContacts = { showContacts = true },
-                        onOpenCheckIn = {
-                            checkInViewModel.reset()
-                            showCheckIn = true
-                        }
-                    )
-
-                    if (showContacts) {
-                        ContactsScreen(
-                            viewModel = contactsViewModel,
-                            onBack = { showContacts = false }
+                when (val s = screen) {
+                    is WewScreen.ConversationList -> {
+                        ConversationListScreen(
+                            viewModel = convListViewModel,
+                            onOpenThread = { threadId, address, displayName ->
+                                screen = WewScreen.Chat(threadId, address, displayName)
+                            },
+                            onOpenContacts = { showContacts = true },
+                            onOpenCheckIn = {
+                                checkInViewModel.reset()
+                                showCheckIn = true
+                            }
                         )
+
+                        if (showContacts) {
+                            ContactsScreen(
+                                viewModel = contactsViewModel,
+                                onBack = { showContacts = false }
+                            )
+                        }
+
+                        if (showCheckIn) {
+                            CheckInScreen(
+                                viewModel = checkInViewModel,
+                                onClose = { showCheckIn = false }
+                            )
+                        }
                     }
 
-                    if (showCheckIn) {
-                        CheckInScreen(
-                            viewModel = checkInViewModel,
-                            onClose = { showCheckIn = false }
+                    is WewScreen.Chat -> {
+                        ChatScreen(
+                            threadId = s.threadId,
+                            recipientAddress = s.address,
+                            displayName = s.displayName,
+                            onBack = { screen = WewScreen.ConversationList }
                         )
                     }
                 }
             }
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Conversations auto-refresh via ContentObserver
     }
 
     private fun requestPermissionsThenStartService() {
@@ -138,9 +158,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Prevent back press from leaving the launcher
+    // Prevent back press from leaving the launcher entirely.
+    // Within-app navigation is handled by BackHandler in each screen composable.
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // Intentionally swallowed — launcher must stay as home screen
+        // Swallowed — BackHandler composables intercept first; this is the final stop.
     }
 }
