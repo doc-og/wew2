@@ -24,13 +24,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -84,6 +81,7 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                .navigationBarsPadding()
         ) {
             // Top bar: clock + credit counter
             TopBar(
@@ -93,7 +91,7 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // App grid (scrollable)
+            // App grid (scrollable) — SOS is the last tile in the grid
             if (uiState.creditsExhausted) {
                 // Credits out — show emergency-only overlay
                 CreditsExhaustedMessage(
@@ -108,6 +106,7 @@ fun HomeScreen(
                         viewModel.onAppClicked(app)
                         onAppClick(app)
                     },
+                    onSosClick = onSosClick,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -122,15 +121,6 @@ fun HomeScreen(
                     .background(Night.copy(alpha = 0.6f))
             )
         }
-
-        // SOS button always docked at bottom — never scrolls away
-        SosButton(
-            onClick = onSosClick,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 24.dp)
-        )
     }
 }
 
@@ -222,6 +212,7 @@ private fun TopBar(credits: Int, dailyBudget: Int) {
 private fun AppGrid(
     apps: List<AppInfo>,
     onAppClick: (AppInfo) -> Unit,
+    onSosClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     LazyVerticalGrid(
@@ -233,6 +224,10 @@ private fun AppGrid(
     ) {
         items(apps, key = { it.packageName }) { app ->
             AppIconItem(app = app, onClick = { onAppClick(app) })
+        }
+        // SOS tile is always the last item in the grid
+        item(key = "sos_tile") {
+            SosTile(onClick = onSosClick)
         }
     }
 }
@@ -281,7 +276,7 @@ private fun AppIconItem(app: AppInfo, onClick: () -> Unit) {
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .size(16.dp)
-                        .clip(CircleShape)
+                        .clip(RoundedCornerShape(8.dp))
                         .background(ElectricViolet),
                     contentAlignment = Alignment.Center
                 ) {
@@ -308,6 +303,42 @@ private fun AppIconItem(app: AppInfo, onClick: () -> Unit) {
 }
 
 @Composable
+private fun SosTile(onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(4.dp)
+            .semantics { contentDescription = "SOS emergency button" }
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(EmergencyRed),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Phone,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(30.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "SOS",
+            fontSize = 11.sp,
+            color = EmergencyRed,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
 private fun CreditsExhaustedMessage(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.padding(32.dp),
@@ -315,7 +346,7 @@ private fun CreditsExhaustedMessage(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "you're out of credits",
+            text = "You're out of credits",
             fontSize = 20.sp,
             fontWeight = FontWeight.Medium,
             color = OnNight,
@@ -323,7 +354,7 @@ private fun CreditsExhaustedMessage(modifier: Modifier = Modifier) {
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "ask your parent to add more, or they'll reset automatically tomorrow morning.",
+            text = "Ask your parent to add more, or they'll reset automatically tomorrow morning.",
             fontSize = 16.sp,
             color = OnNight.copy(alpha = 0.7f),
             textAlign = TextAlign.Center,
@@ -331,36 +362,10 @@ private fun CreditsExhaustedMessage(modifier: Modifier = Modifier) {
         )
         Spacer(modifier = Modifier.height(24.dp))
         Text(
-            text = "you can still call or message your emergency contacts below.",
+            text = "You can still call your emergency contacts using the SOS tile.",
             fontSize = 14.sp,
             color = OnNight.copy(alpha = 0.5f),
             textAlign = TextAlign.Center
-        )
-    }
-}
-
-@Composable
-private fun SosButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = EmergencyRed,
-            contentColor = Color.White
-        ),
-        shape = RoundedCornerShape(16.dp),
-        modifier = modifier
-            .size(width = 160.dp, height = 52.dp)
-            .semantics { contentDescription = "SOS emergency button" }
-    ) {
-        Icon(
-            Icons.Default.Phone,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp)
-        )
-        Text(
-            text = "  SOS",
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Medium
         )
     }
 }

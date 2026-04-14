@@ -8,11 +8,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +37,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wew.parent.data.repository.ParentRepository
@@ -54,60 +63,71 @@ fun RegisterDeviceScreen(onDeviceRegistered: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(ParentBackground)
-            .padding(32.dp),
+            .verticalScroll(rememberScrollState())
+            .imePadding()
+            .padding(horizontal = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        Spacer(Modifier.height(64.dp))
+
+        // Brand
         Text(
-            text = "wew",
-            fontSize = 48.sp,
-            fontWeight = FontWeight.Medium,
-            color = BrandViolet
+            text = "WeW",
+            fontSize = 52.sp,
+            fontWeight = FontWeight.Bold,
+            color = BrandViolet,
+            letterSpacing = (-1).sp
         )
         Text(
-            text = "safe by design",
-            fontSize = 14.sp,
-            color = ElectricViolet.copy(alpha = 0.7f)
+            text = "Parent",
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Medium,
+            color = ElectricViolet.copy(alpha = 0.75f),
+            letterSpacing = 2.sp
         )
 
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(Modifier.height(48.dp))
 
         if (registeredDeviceId == null) {
             // Step 1: name the device
             Text(
-                text = "register child's device",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Medium,
+                text = "Register child's device",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.SemiBold,
                 color = Color(0xFF1A1A2E)
             )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
+            Spacer(Modifier.height(8.dp))
             Text(
-                text = "give the child's device a name so you can recognise it in the dashboard.",
-                fontSize = 15.sp,
-                color = Color(0xFF3D3D5C),
+                text = "Give the child's device a name so you can recognise it in the dashboard.",
+                fontSize = 14.sp,
+                color = Color(0xFF6B6B8A),
                 textAlign = TextAlign.Center,
-                lineHeight = 22.sp
+                lineHeight = 21.sp
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(Modifier.height(32.dp))
 
             OutlinedTextField(
                 value = deviceName,
                 onValueChange = { deviceName = it },
-                label = { Text("device name (e.g. Sam's Tablet)") },
+                label = { Text("Device name (e.g. Sam's Tablet)") },
                 singleLine = true,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth()
             )
 
             if (errorMessage != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(text = errorMessage!!, fontSize = 14.sp, color = Color(0xFFC0392B))
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = errorMessage!!,
+                    fontSize = 13.sp,
+                    color = Color(0xFFC0392B),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(Modifier.height(24.dp))
 
             Button(
                 onClick = {
@@ -116,68 +136,90 @@ fun RegisterDeviceScreen(onDeviceRegistered: () -> Unit) {
                         errorMessage = null
                         runCatching { repo.registerDevice(deviceName.trim()) }
                             .onSuccess { device -> registeredDeviceId = device.id }
-                            .onFailure { e -> errorMessage = e.toUserMessage("couldn't register device — please try again") }
+                            .onFailure { e ->
+                                errorMessage = e.toUserMessage("Couldn't register device — please try again")
+                            }
                         isLoading = false
                     }
                 },
                 enabled = deviceName.isNotBlank() && !isLoading,
-                colors = ButtonDefaults.buttonColors(containerColor = BrandViolet),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().height(52.dp)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = BrandViolet,
+                    disabledContainerColor = BrandViolet.copy(alpha = 0.4f)
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().height(56.dp)
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.height(20.dp))
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(22.dp)
+                    )
                 } else {
-                    Text("register device", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        "Register Device",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         } else {
             // Step 2: show the device ID to copy into the launcher
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = Color(0xFF27AE60),
+                modifier = Modifier.size(48.dp)
+            )
+            Spacer(Modifier.height(16.dp))
             Text(
-                text = "device registered!",
+                text = "Device registered!",
                 fontSize = 22.sp,
-                fontWeight = FontWeight.Medium,
+                fontWeight = FontWeight.SemiBold,
                 color = Color(0xFF1A1A2E)
             )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
+            Spacer(Modifier.height(8.dp))
             Text(
-                text = "enter this device ID on the child's launcher when prompted to link the devices.",
-                fontSize = 15.sp,
-                color = Color(0xFF3D3D5C),
+                text = "Enter this device ID on the child's launcher when prompted to link the devices.",
+                fontSize = 14.sp,
+                color = Color(0xFF6B6B8A),
                 textAlign = TextAlign.Center,
-                lineHeight = 22.sp
+                lineHeight = 21.sp
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(Modifier.height(32.dp))
 
             // Device ID display box
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color.White, RoundedCornerShape(12.dp))
-                    .border(1.dp, BrandViolet.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                    .background(Color.White, RoundedCornerShape(14.dp))
+                    .border(1.5.dp, BrandViolet.copy(alpha = 0.3f), RoundedCornerShape(14.dp))
                     .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "device id",
-                    fontSize = 12.sp,
-                    color = Color(0xFF3D3D5C),
-                    fontWeight = FontWeight.Medium
+                    text = "DEVICE ID",
+                    fontSize = 11.sp,
+                    color = Color(0xFF9999AA),
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.sp
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
                 Text(
                     text = registeredDeviceId!!,
                     fontSize = 13.sp,
                     fontFamily = FontFamily.Monospace,
                     color = Color(0xFF1A1A2E),
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    lineHeight = 20.sp
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(Modifier.height(16.dp))
 
             Button(
                 onClick = {
@@ -187,26 +229,42 @@ fun RegisterDeviceScreen(onDeviceRegistered: () -> Unit) {
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (copied) Color(0xFF27AE60) else BrandViolet
                 ),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().height(48.dp)
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp)
             ) {
+                Icon(
+                    if (copied) Icons.Default.CheckCircle else Icons.Default.ContentCopy,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.size(8.dp))
                 Text(
-                    text = if (copied) "copied!" else "copy device id",
+                    text = if (copied) "Copied!" else "Copy Device ID",
                     fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(Modifier.height(12.dp))
 
             Button(
                 onClick = onDeviceRegistered,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth().height(52.dp)
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().height(56.dp)
             ) {
-                Text("continue to dashboard", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "Continue to Dashboard",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
+
+        Spacer(Modifier.height(64.dp))
     }
 }

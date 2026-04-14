@@ -38,6 +38,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -116,10 +117,13 @@ fun WewParentApp() {
                 }
                 Lifecycle.Event.ON_START -> {
                     if (isAuthenticated && backgroundedAtMs > 0L) {
-                        val timeoutMs = prefs.getInt("auto_logout_timeout_mins", 2) * 60_000L
-                        val elapsed = System.currentTimeMillis() - backgroundedAtMs
-                        if (elapsed >= timeoutMs) {
-                            performAutoLogout()
+                        val timeoutMins = prefs.getInt("auto_logout_timeout_mins", 2)
+                        if (timeoutMins > 0) {
+                            val timeoutMs = timeoutMins * 60_000L
+                            val elapsed = System.currentTimeMillis() - backgroundedAtMs
+                            if (elapsed >= timeoutMs) {
+                                performAutoLogout()
+                            }
                         }
                     }
                     backgroundedAtMs = 0L
@@ -137,11 +141,14 @@ fun WewParentApp() {
         while (true) {
             delay(15_000L)
             if (!isAuthenticated) break
-            val timeoutMs = prefs.getInt("auto_logout_timeout_mins", 2) * 60_000L
-            val elapsed = System.currentTimeMillis() - lastInteractionMs
-            if (elapsed >= timeoutMs) {
-                performAutoLogout()
-                break
+            val timeoutMins = prefs.getInt("auto_logout_timeout_mins", 2)
+            if (timeoutMins > 0) {
+                val timeoutMs = timeoutMins * 60_000L
+                val elapsed = System.currentTimeMillis() - lastInteractionMs
+                if (elapsed >= timeoutMs) {
+                    performAutoLogout()
+                    break
+                }
             }
         }
     }
