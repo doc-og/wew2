@@ -118,8 +118,7 @@ fun ConversationListScreen(
             TopBar(
                 state = state,
                 onMenuClick = { viewModel.showNavMenu() },
-                onNewConversation = { viewModel.showNewConversation() },
-                onSosClick = { viewModel.showSosDialog() }
+                onNewConversation = { viewModel.showNewConversation() }
             )
 
             if (state.isLoading) {
@@ -228,7 +227,8 @@ fun ConversationListScreen(
                 dailyBudget = state.dailyTokenBudget,
                 onConversations = { viewModel.hideNavMenu() },
                 onContacts = { viewModel.hideNavMenu(); onOpenContacts() },
-                onCheckIn = { viewModel.hideNavMenu(); onOpenCheckIn() }
+                onCheckIn = { viewModel.hideNavMenu(); onOpenCheckIn() },
+                onSos = { viewModel.hideNavMenu(); viewModel.showSosDialog() }
             )
         }
     }
@@ -262,8 +262,7 @@ fun ConversationListScreen(
 private fun TopBar(
     state: ConversationListUiState,
     onMenuClick: () -> Unit,
-    onNewConversation: () -> Unit,
-    onSosClick: () -> Unit
+    onNewConversation: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -284,23 +283,6 @@ private fun TopBar(
         )
 
         TokenChip(tokens = state.currentTokens, daily = state.dailyTokenBudget)
-
-        Spacer(modifier = Modifier.width(4.dp))
-
-        // SOS button — always accessible, bypasses token check
-        TextButton(
-            onClick = onSosClick,
-            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                contentColor = Color.White,
-                containerColor = Color(0xFFD32F2F)
-            ),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                horizontal = 10.dp, vertical = 4.dp
-            ),
-            modifier = Modifier.height(32.dp)
-        ) {
-            Text("SOS", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        }
 
         Spacer(modifier = Modifier.width(4.dp))
     }
@@ -590,7 +572,8 @@ fun NavigationMenuSheet(
     dailyBudget: Int,
     onConversations: () -> Unit,
     onContacts: () -> Unit,
-    onCheckIn: () -> Unit
+    onCheckIn: () -> Unit,
+    onSos: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -640,6 +623,30 @@ fun NavigationMenuSheet(
         NavItem("Messages", onClick = onConversations)
         NavItem("Contacts", onClick = onContacts)
         NavItem("Check In", onClick = onCheckIn)
+
+        // Divider before emergency option
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp)
+                .height(1.dp)
+                .background(OnNight.copy(alpha = 0.1f))
+        )
+
+        // SOS — calls parent owner, no tokens required
+        TextButton(
+            onClick = onSos,
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 14.dp, horizontal = 0.dp)
+        ) {
+            Text(
+                "SOS",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFFFF5C5C),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
 
         Spacer(Modifier.height(8.dp))
     }
@@ -719,23 +726,31 @@ private fun SosConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val target = if (!parentPhone.isNullOrBlank()) "your parent ($parentPhone)" else "911"
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF1E1E2E),
         title = {
-            Text("send SOS?", color = Color(0xFFFF5C5C), fontWeight = FontWeight.Bold)
+            Text("call your parent?", color = Color(0xFFFF5C5C), fontWeight = FontWeight.Bold)
         },
         text = {
-            Text(
-                text = "this will call $target immediately.",
-                color = OnNight.copy(alpha = 0.85f),
-                fontSize = 14.sp
-            )
+            if (parentPhone.isNullOrBlank()) {
+                Text(
+                    text = "parent number not set up yet. ask your parent to complete setup.",
+                    color = WarningAmber,
+                    fontSize = 14.sp
+                )
+            } else {
+                Text(
+                    text = "this will call $parentPhone immediately.",
+                    color = OnNight.copy(alpha = 0.85f),
+                    fontSize = 14.sp
+                )
+            }
         },
         confirmButton = {
             TextButton(
                 onClick = onConfirm,
+                enabled = !parentPhone.isNullOrBlank(),
                 colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
                     contentColor = Color(0xFFFF5C5C)
                 )

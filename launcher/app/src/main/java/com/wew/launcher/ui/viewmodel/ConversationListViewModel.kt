@@ -296,7 +296,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     fun hideSosDialog() = _uiState.update { it.copy(showSosConfirm = false) }
 
     fun confirmSos() {
-        val phone = _uiState.value.parentPhoneNumber ?: "911"
+        val phone = _uiState.value.parentPhoneNumber ?: return  // no-op if parent not configured
         _uiState.update { it.copy(showSosConfirm = false, pendingEmergencyCall = phone) }
     }
 
