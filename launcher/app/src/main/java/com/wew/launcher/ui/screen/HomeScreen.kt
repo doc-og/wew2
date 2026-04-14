@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Phone
@@ -95,16 +96,16 @@ fun HomeScreen(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // Top bar: clock + credit counter
+            // Top bar: clock + token counter
             TopBar(
-                credits = uiState.currentCredits,
-                dailyBudget = uiState.dailyBudget
+                tokens = uiState.currentTokens,
+                dailyBudget = uiState.dailyTokenBudget
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
             // App grid (scrollable) — SOS is the last tile in the grid
-            if (uiState.creditsExhausted) {
+            if (uiState.tokensExhausted) {
                 // Credits out — show emergency-only overlay
                 CreditsExhaustedMessage(
                     modifier = Modifier
@@ -126,7 +127,7 @@ fun HomeScreen(
         }
 
         // Dim overlay when credits are exhausted (except SOS area)
-        if (uiState.creditsExhausted) {
+        if (uiState.tokensExhausted) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -165,8 +166,8 @@ fun HomeScreen(
 }
 
 @Composable
-private fun TopBar(credits: Int, dailyBudget: Int) {
-    val lowCredits = credits < (dailyBudget * 0.2f)
+private fun TopBar(tokens: Int, dailyBudget: Int) {
+    val lowCredits = tokens < (dailyBudget * 0.2f)
     val creditColor = if (lowCredits) WarningAmber else OnNight
 
     // Pulse animation when low
@@ -214,18 +215,18 @@ private fun TopBar(credits: Int, dailyBudget: Int) {
             modifier = Modifier
                 .alpha(if (lowCredits) alpha else 1f)
                 .semantics {
-                    contentDescription = "$credits credits remaining"
+                    contentDescription = "$tokens tokens remaining"
                 }
         ) {
             Text(
-                text = credits.toString(),
+                text = tokens.toString(),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Medium,
                 color = creditColor
             )
             Text(
-                text = "credits",
+                text = "tokens",
                 fontSize = 11.sp,
                 color = creditColor.copy(alpha = 0.7f)
             )

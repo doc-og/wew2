@@ -6,20 +6,20 @@ import android.content.Intent
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.wew.launcher.credit.CreditEngine
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.AppInfo
 import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.service.LauncherForegroundService
+import com.wew.launcher.token.TokenEngine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import android.util.Log
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneOffset
@@ -27,10 +27,10 @@ import java.time.format.DateTimeFormatter
 
 data class HomeUiState(
     val apps: List<AppInfo> = emptyList(),
-    val currentCredits: Int = 100,
-    val dailyBudget: Int = 100,
+    val currentTokens: Int = 10000,
+    val dailyTokenBudget: Int = 10000,
     val isLocked: Boolean = false,
-    val creditsExhausted: Boolean = false,
+    val tokensExhausted: Boolean = false,
     val isLoading: Boolean = true,
     val deviceId: String = "",
     val appsWithNotifications: Set<String> = emptySet(),
@@ -40,7 +40,9 @@ data class HomeUiState(
     val showTimeSelectionDialog: Boolean = false,
     val passcodeHash: String? = null,
     val showAccessDeniedSnackbar: Boolean = false,
-    val activeTempAccess: Map<String, String> = emptyMap()
+    val activeTempAccess: Map<String, String> = emptyMap(),
+    // Token cost overrides fetched from Supabase (empty = use engine defaults)
+    val tokenCostOverrides: Map<String, Int> = emptyMap()
 )
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
@@ -59,8 +61,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startForegroundService() {
         val ctx = getApplication<Application>()
-        val intent = Intent(ctx, LauncherForegroundService::class.java)
-        ctx.startForegroundService(intent)
+        ctx.startForegroundService(Intent(ctx, LauncherForegroundService::class.java))
     }
 
     private fun loadState() {
@@ -76,43 +77,37 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val whitelistedApps = repo.getWhitelistedApps(deviceId)
                 val pm = getApplication<Application>().packageManager
                 val appInfoList = whitelistedApps.map { record ->
-                    val icon = runCatching {
-                        pm.getApplicationIcon(record.packageName)
-                    }.getOrNull()
+                    val icon = runCatching { pm.getApplicationIcon(record.packageName) }.getOrNull()
                     AppInfo(
                         packageName = record.packageName,
                         appName = record.appName,
                         icon = icon,
                         isWhitelisted = true,
-                        creditCost = record.creditCost
+                        tokenCost = TokenEngine.defaults[ActionType.APP_OPEN]?.baseTokens ?: 5
                     )
                 }
                 val passcode = repo.getDevicePasscode(deviceId)
                 val tempAccess = repo.getActiveTempAccess(deviceId)
                 val tempAccessMap = tempAccess.associate { it.packageName to it.expiresAt }
-                val syntheticApps = listOf(
-                    AppInfo("com.wew.launcher.contacts", "Contacts", null, true, 0),
-                    AppInfo("com.wew.launcher.checkin", "Check In", null, true, 0)
-                )
+                val costOverrides = repo.getTokenCostOverrides(deviceId)
+
                 _uiState.update {
                     it.copy(
-                        apps = appInfoList + syntheticApps,
-                        currentCredits = device.currentCredits,
-                        dailyBudget = device.dailyCreditBudget,
+                        apps = appInfoList,
+                        currentTokens = device.currentTokens,
+                        dailyTokenBudget = device.dailyTokenBudget,
                         isLocked = device.isLocked,
-                        creditsExhausted = device.currentCredits <= 0,
+                        tokensExhausted = device.currentTokens <= 0,
                         isLoading = false,
                         deviceId = deviceId,
                         passcodeHash = passcode?.passcodeHash,
-                        activeTempAccess = tempAccessMap
+                        activeTempAccess = tempAccessMap,
+                        tokenCostOverrides = costOverrides
                     )
                 }
-                // Continuously poll for whitelist changes every 30 seconds so
-                // apps enabled in the parent dashboard appear on this screen promptly.
                 startPolling(deviceId)
             }.onFailure {
-                Log.e("WewSync", "syncAppList failed: ${it.javaClass.simpleName}: ${it.message}", it)
-                // Supabase unavailable — fall back to local apps so grid is never empty
+                Log.e("WewSync", "loadState failed: ${it.javaClass.simpleName}: ${it.message}", it)
                 loadLocalApps()
             }
         }
@@ -133,62 +128,48 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             appName = record.appName,
                             icon = icon,
                             isWhitelisted = true,
-                            creditCost = record.creditCost
+                            tokenCost = TokenEngine.defaults[ActionType.APP_OPEN]?.baseTokens ?: 5
                         )
                     }
                     val tempAccess = repo.getActiveTempAccess(deviceId)
                     val tempAccessMap = tempAccess.associate { it.packageName to it.expiresAt }
-                    val syntheticApps = listOf(
-                        AppInfo("com.wew.launcher.contacts", "Contacts", null, true, 0),
-                        AppInfo("com.wew.launcher.checkin", "Check In", null, true, 0)
-                    )
                     _uiState.update {
                         it.copy(
-                            apps = appInfoList + syntheticApps,
-                            currentCredits = device.currentCredits,
-                            dailyBudget = device.dailyCreditBudget,
+                            apps = appInfoList,
+                            currentTokens = device.currentTokens,
+                            dailyTokenBudget = device.dailyTokenBudget,
                             isLocked = device.isLocked,
-                            creditsExhausted = device.currentCredits <= 0,
+                            tokensExhausted = device.currentTokens <= 0,
                             activeTempAccess = tempAccessMap
                         )
                     }
-                }.onFailure {
-                    Log.w("WewSync", "poll failed: ${it.message}")
-                }
+                }.onFailure { Log.w("WewSync", "poll failed: ${it.message}") }
             }
         }
     }
 
     private fun loadLocalApps() {
         val pm = getApplication<Application>().packageManager
-        val intent = Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
-        }
+        val intent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
         val resolveInfoList = pm.queryIntentActivities(intent, 0)
         val selfPackage = getApplication<Application>().packageName
         val apps = resolveInfoList
             .filter { it.activityInfo.packageName != selfPackage }
             .map { ri ->
                 val pkg = ri.activityInfo.packageName
-                val icon = runCatching { pm.getApplicationIcon(pkg) }.getOrNull()
                 AppInfo(
                     packageName = pkg,
                     appName = ri.loadLabel(pm).toString(),
-                    icon = icon,
+                    icon = runCatching { pm.getApplicationIcon(pkg) }.getOrNull(),
                     isWhitelisted = DeviceRepository.DEFAULT_WHITELIST.contains(pkg),
-                    creditCost = 1
+                    tokenCost = TokenEngine.defaults[ActionType.APP_OPEN]?.baseTokens ?: 5
                 )
             }
             .sortedBy { it.appName.lowercase() }
-        val syntheticApps = listOf(
-            AppInfo("com.wew.launcher.contacts", "Contacts", null, true, 0),
-            AppInfo("com.wew.launcher.checkin", "Check In", null, true, 0)
-        )
-        _uiState.update { it.copy(apps = apps + syntheticApps, isLoading = false) }
+        _uiState.update { it.copy(apps = apps, isLoading = false) }
     }
 
-    /** Called from MainActivity.onResume — re-fetches the whitelist so toggling an app
-     *  in the parent dashboard is reflected immediately when the child returns home. */
+    /** Called from MainActivity.onResume — re-fetches whitelist to reflect parent dashboard changes. */
     fun refreshApps() {
         val deviceId = prefs.getString("device_id", null) ?: return
         viewModelScope.launch {
@@ -202,25 +183,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         appName = record.appName,
                         icon = icon,
                         isWhitelisted = true,
-                        creditCost = record.creditCost
+                        tokenCost = TokenEngine.defaults[ActionType.APP_OPEN]?.baseTokens ?: 5
                     )
                 }
-                val syntheticApps = listOf(
-                    AppInfo("com.wew.launcher.contacts", "Contacts", null, true, 0),
-                    AppInfo("com.wew.launcher.checkin", "Check In", null, true, 0)
-                )
-                _uiState.update { it.copy(apps = appInfoList + syntheticApps) }
-            }.onFailure {
-                Log.e("WewSync", "refreshApps failed: ${it.message}")
-            }
+                _uiState.update { it.copy(apps = appInfoList) }
+            }.onFailure { Log.e("WewSync", "refreshApps failed: ${it.message}") }
         }
     }
 
     fun onAppClicked(app: AppInfo) {
         val state = _uiState.value
-        if (state.creditsExhausted) return
+        if (state.tokensExhausted) return
 
-        // Check if app is whitelisted OR has active temp access
         val tempExpiry = state.activeTempAccess[app.packageName]
         val hasValidTempAccess = tempExpiry != null &&
             Instant.parse(tempExpiry).isAfter(Instant.now())
@@ -231,23 +205,23 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val actionType = resolveActionType(app.packageName)
-        val result = CreditEngine.deduct(
+        val result = TokenEngine.consume(
             actionType = actionType,
-            currentBalance = state.currentCredits,
-            dailyBudget = state.dailyBudget
+            currentBalance = state.currentTokens,
+            overrides = state.tokenCostOverrides
         )
 
         if (result.success) {
             hapticFeedback()
             _uiState.update {
                 it.copy(
-                    currentCredits = result.newBalance,
-                    creditsExhausted = result.newBalance <= 0,
+                    currentTokens = result.newBalance,
+                    tokensExhausted = result.newBalance <= 0,
                     appsWithNotifications = it.appsWithNotifications - app.packageName
                 )
             }
             viewModelScope.launch {
-                repo.deductCredits(
+                repo.consumeTokens(
                     deviceId = state.deviceId,
                     amount = result.cost,
                     actionType = actionType.value,
@@ -255,6 +229,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     appName = app.appName
                 )
             }
+        } else {
+            // Insufficient tokens — prompt child to request more
+            viewModelScope.launch {
+                repo.logActivity(
+                    ActivityLog(
+                        deviceId = state.deviceId,
+                        actionType = ActionType.TOKEN_EXHAUSTED.value,
+                        appPackage = app.packageName,
+                        appName = app.appName
+                    )
+                )
+            }
+            _uiState.update { it.copy(tokensExhausted = true) }
         }
     }
 
@@ -274,7 +261,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val storedHash = state.passcodeHash
 
         if (storedHash == null) {
-            // No passcode configured — deny access
             _uiState.update {
                 it.copy(
                     showPasscodeDialog = false,
@@ -287,17 +273,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         val computedHash = hashPin(deviceId, pin)
         if (computedHash == storedHash) {
-            // Correct passcode — proceed to time selection
             _uiState.update {
-                it.copy(
-                    showPasscodeDialog = false,
-                    showTimeSelectionDialog = true
-                )
+                it.copy(showPasscodeDialog = false, showTimeSelectionDialog = true)
             }
         } else {
             val attemptsLeft = state.passcodeAttemptsLeft - 1
             if (attemptsLeft <= 0) {
-                // All attempts exhausted
                 val blockedApp = state.pendingUnauthorizedApp
                 _uiState.update {
                     it.copy(
@@ -307,7 +288,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         showAccessDeniedSnackbar = true
                     )
                 }
-                // Log the block event
                 if (blockedApp != null && deviceId.isNotEmpty()) {
                     viewModelScope.launch {
                         runCatching {
@@ -316,13 +296,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                                     deviceId = deviceId,
                                     actionType = ActionType.APP_BLOCKED.value,
                                     appPackage = blockedApp.packageName,
-                                    appName = blockedApp.appName,
-                                    creditsDeducted = 0
+                                    appName = blockedApp.appName
                                 )
                             )
-                        }.onFailure {
-                            Log.e("WewSync", "logActivity app_blocked failed: ${it.message}")
-                        }
+                        }.onFailure { Log.e("WewSync", "logActivity app_blocked failed: ${it.message}") }
                     }
                 }
             } else {
@@ -352,14 +329,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val deviceId = state.deviceId
 
         val expiresAt = if (durationMinutes == -1) {
-            // Rest of day — use 11:59 PM today (simplified; production would check schedule)
             val endOfDay = java.time.LocalDate.now()
                 .atTime(23, 59, 0)
                 .toInstant(ZoneOffset.UTC)
             DateTimeFormatter.ISO_INSTANT.format(endOfDay)
         } else {
-            val expiry = Instant.now().plusSeconds(durationMinutes * 60L)
-            DateTimeFormatter.ISO_INSTANT.format(expiry)
+            DateTimeFormatter.ISO_INSTANT.format(
+                Instant.now().plusSeconds(durationMinutes * 60L)
+            )
         }
 
         _uiState.update {
@@ -373,26 +350,55 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching {
                 repo.grantTempAccess(deviceId, app.packageName, expiresAt)
-                repo.deductCredits(
-                    deviceId = deviceId,
-                    amount = ActionType.TEMP_ACCESS_GRANTED.baseCost,
-                    actionType = ActionType.TEMP_ACCESS_GRANTED.value,
-                    appPackage = app.packageName,
-                    appName = app.appName
+                val result = TokenEngine.consume(
+                    actionType = ActionType.TEMP_ACCESS_GRANTED,
+                    currentBalance = state.currentTokens,
+                    overrides = state.tokenCostOverrides
                 )
-                _uiState.update {
-                    it.copy(
-                        currentCredits = maxOf(0, it.currentCredits - ActionType.TEMP_ACCESS_GRANTED.baseCost),
-                        creditsExhausted = (it.currentCredits - ActionType.TEMP_ACCESS_GRANTED.baseCost) <= 0
+                if (result.success) {
+                    repo.consumeTokens(
+                        deviceId = deviceId,
+                        amount = result.cost,
+                        actionType = ActionType.TEMP_ACCESS_GRANTED.value,
+                        appPackage = app.packageName,
+                        appName = app.appName
                     )
+                    _uiState.update {
+                        it.copy(
+                            currentTokens = result.newBalance,
+                            tokensExhausted = result.newBalance <= 0
+                        )
+                    }
                 }
-            }.onFailure {
-                Log.e("WewSync", "grantTempAccess failed: ${it.message}")
-            }
+            }.onFailure { Log.e("WewSync", "grantTempAccess failed: ${it.message}") }
         }
     }
 
-    /** For testing / FCM: mark an app as having a pending notification. */
+    /** Submit a request to the parent for more tokens for a specific app. */
+    fun requestMoreTokens(app: AppInfo?, reason: String?) {
+        val state = _uiState.value
+        if (state.deviceId.isEmpty()) return
+        viewModelScope.launch {
+            repo.submitTokenRequest(
+                com.wew.launcher.data.model.TokenRequest(
+                    deviceId = state.deviceId,
+                    appPackage = app?.packageName,
+                    appName = app?.appName,
+                    tokensRequested = 1000,
+                    reason = reason
+                )
+            )
+            repo.logActivity(
+                ActivityLog(
+                    deviceId = state.deviceId,
+                    actionType = ActionType.TOKEN_REQUEST.value,
+                    appPackage = app?.packageName,
+                    appName = app?.appName
+                )
+            )
+        }
+    }
+
     fun markAppNotification(packageName: String) {
         _uiState.update {
             it.copy(appsWithNotifications = it.appsWithNotifications + packageName)
@@ -405,13 +411,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return digest.digest(input.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
-    private fun resolveActionType(packageName: String): ActionType {
-        return when {
-            packageName.contains("dialer") || packageName.contains("phone") -> ActionType.CALL_MADE
-            packageName.contains("mms") || packageName.contains("messaging") -> ActionType.MESSAGE_SENT
-            packageName.contains("camera") -> ActionType.PHOTO_TAKEN
-            else -> ActionType.APP_OPEN
-        }
+    private fun resolveActionType(packageName: String): ActionType = when {
+        packageName.contains("dialer") || packageName.contains("phone") -> ActionType.CALL_MADE
+        packageName.contains("mms") || packageName.contains("messaging") -> ActionType.SMS_SENT
+        packageName.contains("camera") -> ActionType.PHOTO_TAKEN
+        else -> ActionType.APP_OPEN
     }
 
     private fun hapticFeedback() {
