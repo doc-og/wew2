@@ -27,6 +27,7 @@ import com.wew.launcher.ui.screen.CheckInScreen
 import com.wew.launcher.ui.screen.ContactsScreen
 import com.wew.launcher.ui.screen.ConversationListScreen
 import com.wew.launcher.ui.screen.SetupActivity
+import com.wew.launcher.ui.screen.WebViewScreen
 import com.wew.launcher.ui.theme.WewLauncherTheme
 import com.wew.launcher.ui.viewmodel.CheckInViewModel
 import com.wew.launcher.ui.viewmodel.ContactsViewModel
@@ -41,6 +42,7 @@ private sealed class WewScreen {
         val address: String,
         val displayName: String
     ) : WewScreen()
+    data class Web(val url: String) : WewScreen()
 }
 
 // ── Activity ──────────────────────────────────────────────────────────────────
@@ -93,7 +95,8 @@ class MainActivity : ComponentActivity() {
                             onOpenCheckIn = {
                                 checkInViewModel.reset()
                                 showCheckIn = true
-                            }
+                            },
+                            onOpenBrowser = { screen = WewScreen.Web("https://www.google.com") }
                         )
 
                         if (showContacts) {
@@ -116,6 +119,13 @@ class MainActivity : ComponentActivity() {
                             threadId = s.threadId,
                             recipientAddress = s.address,
                             displayName = s.displayName,
+                            onBack = { screen = WewScreen.ConversationList }
+                        )
+                    }
+
+                    is WewScreen.Web -> {
+                        WebViewScreen(
+                            initialUrl = s.url,
                             onBack = { screen = WewScreen.ConversationList }
                         )
                     }

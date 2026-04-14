@@ -78,7 +78,8 @@ fun ConversationListScreen(
     viewModel: ConversationListViewModel,
     onOpenThread: (threadId: Long, address: String, displayName: String) -> Unit,
     onOpenContacts: () -> Unit,
-    onOpenCheckIn: () -> Unit
+    onOpenCheckIn: () -> Unit,
+    onOpenBrowser: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -228,6 +229,7 @@ fun ConversationListScreen(
                 onConversations = { viewModel.hideNavMenu() },
                 onContacts = { viewModel.hideNavMenu(); onOpenContacts() },
                 onCheckIn = { viewModel.hideNavMenu(); onOpenCheckIn() },
+                onBrowser = { viewModel.hideNavMenu(); onOpenBrowser() },
                 onSos = { viewModel.hideNavMenu(); viewModel.showSosDialog() }
             )
         }
@@ -573,6 +575,7 @@ fun NavigationMenuSheet(
     onConversations: () -> Unit,
     onContacts: () -> Unit,
     onCheckIn: () -> Unit,
+    onBrowser: () -> Unit = {},
     onSos: () -> Unit
 ) {
     Column(
@@ -623,6 +626,7 @@ fun NavigationMenuSheet(
         NavItem("Messages", onClick = onConversations)
         NavItem("Contacts", onClick = onContacts)
         NavItem("Check In", onClick = onCheckIn)
+        NavItem("Browser", onClick = onBrowser)
 
         // Divider before emergency option
         Box(
