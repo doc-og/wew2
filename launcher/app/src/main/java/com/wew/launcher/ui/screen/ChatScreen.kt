@@ -1,6 +1,8 @@
 package com.wew.launcher.ui.screen
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -28,6 +30,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -35,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -94,6 +100,29 @@ fun ChatScreen(
         }
     }
 
+    // Launch phone dialer when a call is confirmed
+    LaunchedEffect(state.pendingCall) {
+        state.pendingCall?.let { address ->
+            val intent = Intent(Intent.ACTION_DIAL).apply {
+                data = Uri.parse("tel:$address")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+            vm.clearPendingCall()
+        }
+    }
+
+    // Call confirmation dialog
+    if (state.showCallConfirm) {
+        CallConfirmDialog(
+            recipientName = state.recipientName.ifBlank { displayName },
+            tokenCost = 100,
+            tokensExhausted = state.tokensExhausted,
+            onConfirm = vm::confirmCall,
+            onDismiss = vm::dismissCallConfirm
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -103,7 +132,8 @@ fun ChatScreen(
     ) {
         ChatTopBar(
             displayName = state.recipientName.ifBlank { displayName },
-            onBack = onBack
+            onBack = onBack,
+            onCall = vm::onCallClick
         )
 
         HorizontalDivider(color = OnNight.copy(alpha = 0.08f), thickness = 1.dp)
@@ -156,7 +186,7 @@ fun ChatScreen(
 // ── Top bar ───────────────────────────────────────────────────────────────────
 
 @Composable
-private fun ChatTopBar(displayName: String, onBack: () -> Unit) {
+private fun ChatTopBar(displayName: String, onBack: () -> Unit, onCall: () -> Unit = {}) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -197,7 +227,70 @@ private fun ChatTopBar(displayName: String, onBack: () -> Unit) {
             color = OnNight,
             modifier = Modifier.weight(1f)
         )
+
+        IconButton(onClick = onCall) {
+            Icon(
+                Icons.Default.Call,
+                contentDescription = "Call",
+                tint = BrandViolet
+            )
+        }
     }
+}
+
+// ── Call confirm dialog ───────────────────────────────────────────────────────
+
+@Composable
+private fun CallConfirmDialog(
+    recipientName: String,
+    tokenCost: Int,
+    tokensExhausted: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1E1E2E),
+        title = {
+            Text(
+                text = "call $recipientName?",
+                color = OnNight,
+                fontWeight = FontWeight.Medium
+            )
+        },
+        text = {
+            if (tokensExhausted) {
+                Text(
+                    text = "you don't have enough tokens to make a call.",
+                    color = WarningAmber,
+                    fontSize = 14.sp
+                )
+            } else {
+                Text(
+                    text = "this will use $tokenCost tokens.",
+                    color = OnNight.copy(alpha = 0.75f),
+                    fontSize = 14.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = !tokensExhausted,
+                colors = ButtonDefaults.textButtonColors(contentColor = BrandViolet)
+            ) {
+                Text("call")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = OnNight.copy(alpha = 0.6f))
+            ) {
+                Text("cancel")
+            }
+        }
+    )
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────

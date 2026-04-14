@@ -28,7 +28,11 @@ data class ChatUiState(
     val dailyTokenBudget: Int = 10000,
     val tokensExhausted: Boolean = false,
     val recipientName: String = "",
-    val recipientAddress: String = ""
+    val recipientAddress: String = "",
+    /** Show call-confirmation dialog. */
+    val showCallConfirm: Boolean = false,
+    /** Set to the address to dial; UI observes and launches the intent, then clears. */
+    val pendingCall: String? = null
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -159,6 +163,28 @@ class ChatViewModel(
             }
         }
     }
+
+    // ── Call ──────────────────────────────────────────────────────────────────
+
+    fun onCallClick() = _uiState.update { it.copy(showCallConfirm = true) }
+    fun dismissCallConfirm() = _uiState.update { it.copy(showCallConfirm = false) }
+
+    fun confirmCall() {
+        val deviceId = prefs.getString("device_id", null) ?: return
+        dismissCallConfirm()
+        viewModelScope.launch {
+            // Deduct base call cost; per-minute billing would require a separate timer
+            repo.consumeTokens(
+                deviceId = deviceId,
+                amount = 100,
+                actionType = ActionType.CALL_MADE.value,
+                appName = "Phone"
+            )
+            _uiState.update { it.copy(pendingCall = it.recipientAddress) }
+        }
+    }
+
+    fun clearPendingCall() = _uiState.update { it.copy(pendingCall = null) }
 
     // ── Factory ───────────────────────────────────────────────────────────────
 

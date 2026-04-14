@@ -52,7 +52,11 @@ data class ConversationListUiState(
     val contextMenuThread: ConversationItem? = null,
     val showNavMenu: Boolean = false,
     val showNewConversationSheet: Boolean = false,
-    val approvedContacts: List<WewContact> = emptyList()
+    val approvedContacts: List<WewContact> = emptyList(),
+    /** Show SOS confirmation dialog. */
+    val showSosConfirm: Boolean = false,
+    /** Set to the number to dial; UI observes and launches the intent, then clears. */
+    val pendingEmergencyCall: String? = null
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -285,6 +289,18 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
     fun showNewConversation() = _uiState.update { it.copy(showNewConversationSheet = true) }
     fun hideNewConversation() = _uiState.update { it.copy(showNewConversationSheet = false) }
+
+    // ── SOS ───────────────────────────────────────────────────────────────────
+
+    fun showSosDialog() = _uiState.update { it.copy(showSosConfirm = true) }
+    fun hideSosDialog() = _uiState.update { it.copy(showSosConfirm = false) }
+
+    fun confirmSos() {
+        val phone = _uiState.value.parentPhoneNumber ?: "911"
+        _uiState.update { it.copy(showSosConfirm = false, pendingEmergencyCall = phone) }
+    }
+
+    fun clearPendingEmergencyCall() = _uiState.update { it.copy(pendingEmergencyCall = null) }
 
     // ── Token request ─────────────────────────────────────────────────────────
 

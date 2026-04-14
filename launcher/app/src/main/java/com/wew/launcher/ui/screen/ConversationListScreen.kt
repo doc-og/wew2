@@ -1,5 +1,7 @@
 package com.wew.launcher.ui.screen
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -30,6 +32,8 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -43,6 +47,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -78,6 +83,27 @@ fun ConversationListScreen(
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
+    // Launch dialer when SOS is confirmed
+    LaunchedEffect(state.pendingEmergencyCall) {
+        state.pendingEmergencyCall?.let { number ->
+            val intent = Intent(Intent.ACTION_DIAL).apply {
+                data = Uri.parse("tel:$number")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+            viewModel.clearPendingEmergencyCall()
+        }
+    }
+
+    // SOS confirmation dialog
+    if (state.showSosConfirm) {
+        SosConfirmDialog(
+            parentPhone = state.parentPhoneNumber,
+            onConfirm = viewModel::confirmSos,
+            onDismiss = viewModel::hideSosDialog
+        )
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -92,7 +118,8 @@ fun ConversationListScreen(
             TopBar(
                 state = state,
                 onMenuClick = { viewModel.showNavMenu() },
-                onNewConversation = { viewModel.showNewConversation() }
+                onNewConversation = { viewModel.showNewConversation() },
+                onSosClick = { viewModel.showSosDialog() }
             )
 
             if (state.isLoading) {
@@ -235,7 +262,8 @@ fun ConversationListScreen(
 private fun TopBar(
     state: ConversationListUiState,
     onMenuClick: () -> Unit,
-    onNewConversation: () -> Unit
+    onNewConversation: () -> Unit,
+    onSosClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -255,8 +283,24 @@ private fun TopBar(
             modifier = Modifier.weight(1f).padding(start = 4.dp)
         )
 
-        // Token balance — compact display
         TokenChip(tokens = state.currentTokens, daily = state.dailyTokenBudget)
+
+        Spacer(modifier = Modifier.width(4.dp))
+
+        // SOS button — always accessible, bypasses token check
+        TextButton(
+            onClick = onSosClick,
+            colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                contentColor = Color.White,
+                containerColor = Color(0xFFD32F2F)
+            ),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                horizontal = 10.dp, vertical = 4.dp
+            ),
+            modifier = Modifier.height(32.dp)
+        ) {
+            Text("SOS", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        }
 
         Spacer(modifier = Modifier.width(4.dp))
     }
@@ -665,6 +709,51 @@ private fun NewConversationSheet(
             }
         }
     }
+}
+
+// ── SOS confirm dialog ────────────────────────────────────────────────────────
+
+@Composable
+private fun SosConfirmDialog(
+    parentPhone: String?,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val target = if (!parentPhone.isNullOrBlank()) "your parent ($parentPhone)" else "911"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1E1E2E),
+        title = {
+            Text("send SOS?", color = Color(0xFFFF5C5C), fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Text(
+                text = "this will call $target immediately.",
+                color = OnNight.copy(alpha = 0.85f),
+                fontSize = 14.sp
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                    contentColor = Color(0xFFFF5C5C)
+                )
+            ) {
+                Text("call now", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                    contentColor = OnNight.copy(alpha = 0.6f)
+                )
+            ) {
+                Text("cancel")
+            }
+        }
+    )
 }
 
 // ── Timestamp helpers ─────────────────────────────────────────────────────────
