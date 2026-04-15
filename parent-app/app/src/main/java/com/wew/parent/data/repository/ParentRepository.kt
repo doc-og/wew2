@@ -169,6 +169,71 @@ class ParentRepository {
             .decodeList()
     }
 
+    // Tokens — operates on current_tokens / token_ledger (the launcher's token system)
+    suspend fun addTokens(deviceId: String, amount: Int) {
+        val device = supabase.postgrest["devices"]
+            .select(Columns.ALL) { filter { eq("id", deviceId) } }
+            .decodeSingle<Device>()
+        val newBalance = device.currentTokens + amount
+        supabase.postgrest["token_ledger"].insert(
+            buildJsonObject {
+                put("device_id", deviceId)
+                put("action_type", "parent_add")
+                put("tokens_consumed", -amount)   // negative = credit
+                put("balance_after", newBalance)
+            }
+        )
+        supabase.postgrest["devices"].update(
+            buildJsonObject { put("current_tokens", newBalance) }
+        ) { filter { eq("id", deviceId) } }
+    }
+
+    suspend fun removeTokens(deviceId: String, amount: Int) {
+        val device = supabase.postgrest["devices"]
+            .select(Columns.ALL) { filter { eq("id", deviceId) } }
+            .decodeSingle<Device>()
+        val newBalance = maxOf(0, device.currentTokens - amount)
+        supabase.postgrest["token_ledger"].insert(
+            buildJsonObject {
+                put("device_id", deviceId)
+                put("action_type", "parent_remove")
+                put("tokens_consumed", amount)
+                put("balance_after", newBalance)
+            }
+        )
+        supabase.postgrest["devices"].update(
+            buildJsonObject { put("current_tokens", newBalance) }
+        ) { filter { eq("id", deviceId) } }
+    }
+
+    /** Returns count of pending URL requests for badge display on dashboard. */
+    suspend fun getPendingUrlCount(deviceId: String): Int =
+        runCatching {
+            supabase.postgrest["url_access_requests"]
+                .select(Columns.ALL) {
+                    filter {
+                        eq("device_id", deviceId)
+                        eq("status", "pending")
+                    }
+                }
+                .decodeList<UrlAccessRequest>()
+                .size
+        }.getOrElse { 0 }
+
+    /** Returns count of pending contact requests for badge display on dashboard. */
+    suspend fun getPendingContactCount(deviceId: String): Int =
+        runCatching {
+            supabase.postgrest["contacts"]
+                .select(Columns.ALL) {
+                    filter {
+                        eq("device_id", deviceId)
+                        eq("status", "requested")
+                    }
+                }
+                .decodeList<Contact>()
+                .size
+        }.getOrElse { 0 }
+
     // Location
     suspend fun getLocationHistory(deviceId: String, limit: Int = 50): List<LocationPoint> {
         return supabase.postgrest["location_log"]

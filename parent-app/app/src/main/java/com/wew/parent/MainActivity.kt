@@ -278,8 +278,18 @@ fun WewParentApp() {
             ) {
                 composable("dashboard") {
                     DashboardScreen(
-                        onAddCredits = { },
-                        onRemoveCredits = { }
+                        onNavigateUrls = {
+                            navController.navigate("urls") {
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onNavigateContacts = {
+                            navController.navigate("contacts") {
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
                     )
                 }
                 composable("apps") {

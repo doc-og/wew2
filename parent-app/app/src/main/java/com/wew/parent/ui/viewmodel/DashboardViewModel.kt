@@ -17,9 +17,10 @@ data class DashboardUiState(
     val device: Device? = null,
     val activityFeed: List<ActivityLogEntry> = emptyList(),
     val lastLocation: LocationPoint? = null,
+    val pendingUrlCount: Int = 0,
+    val pendingContactCount: Int = 0,
     val isLoading: Boolean = true,
-    val errorMessage: String? = null,
-    val creditDialogOpen: Boolean = false
+    val errorMessage: String? = null
 )
 
 class DashboardViewModel : ViewModel() {
@@ -41,46 +42,52 @@ class DashboardViewModel : ViewModel() {
                     ?: error("No device found. Pair a child device first.")
                 val activity = repo.getActivityLog(device.id, limit = 20)
                 val location = repo.getLocationHistory(device.id, limit = 1).firstOrNull()
+                val pendingUrl = repo.getPendingUrlCount(device.id)
+                val pendingContacts = repo.getPendingContactCount(device.id)
                 _uiState.update {
                     it.copy(
                         device = device,
                         activityFeed = activity,
                         lastLocation = location,
+                        pendingUrlCount = pendingUrl,
+                        pendingContactCount = pendingContacts,
                         isLoading = false
                     )
                 }
             }.onFailure { e ->
                 _uiState.update {
-                    it.copy(isLoading = false, errorMessage = e.toUserMessage("couldn't load dashboard — check your connection"))
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = e.toUserMessage("couldn't load dashboard — check your connection")
+                    )
                 }
             }
         }
     }
 
-    fun addCredits(amount: Int, note: String?) {
+    fun addTokens(amount: Int) {
         val deviceId = _uiState.value.device?.id ?: return
         viewModelScope.launch {
-            runCatching { repo.addCredits(deviceId, amount, note) }
+            runCatching { repo.addTokens(deviceId, amount) }
                 .onSuccess { loadDashboard() }
-                .onFailure { e -> _uiState.update { it.copy(errorMessage = e.toUserMessage("couldn't add credits — please try again")) } }
+                .onFailure { e ->
+                    _uiState.update {
+                        it.copy(errorMessage = e.toUserMessage("couldn't add tokens — please try again"))
+                    }
+                }
         }
     }
 
-    fun removeCredits(amount: Int, note: String?) {
+    fun removeTokens(amount: Int) {
         val deviceId = _uiState.value.device?.id ?: return
         viewModelScope.launch {
-            runCatching { repo.removeCredits(deviceId, amount, note) }
+            runCatching { repo.removeTokens(deviceId, amount) }
                 .onSuccess { loadDashboard() }
-                .onFailure { e -> _uiState.update { it.copy(errorMessage = e.toUserMessage("couldn't remove credits — please try again")) } }
-        }
-    }
-
-    fun remoteLock(locked: Boolean) {
-        val deviceId = _uiState.value.device?.id ?: return
-        viewModelScope.launch {
-            runCatching { repo.remoteLockDevice(deviceId, locked) }
-                .onSuccess { loadDashboard() }
-                .onFailure { e -> _uiState.update { it.copy(errorMessage = e.toUserMessage("couldn't update lock status — please try again")) } }
+                .onFailure { e ->
+                    _uiState.update {
+                        it.copy(errorMessage = e.toUserMessage("couldn't remove tokens — please try again"))
+                    }
+                }
         }
     }
 

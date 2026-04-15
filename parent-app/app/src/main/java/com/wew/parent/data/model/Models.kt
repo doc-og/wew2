@@ -13,6 +13,8 @@ data class Device(
     @SerialName("current_credits") val currentCredits: Int = 100,
     @SerialName("daily_credit_budget") val dailyCreditBudget: Int = 100,
     @SerialName("credits_reset_time") val creditsResetTime: String = "07:00:00",
+    @SerialName("current_tokens") val currentTokens: Int = 10000,
+    @SerialName("daily_token_budget") val dailyTokenBudget: Int = 10000,
     @SerialName("last_seen_at") val lastSeenAt: String? = null
 )
 
@@ -24,6 +26,7 @@ data class ActivityLogEntry(
     @SerialName("app_package") val appPackage: String? = null,
     @SerialName("app_name") val appName: String? = null,
     @SerialName("credits_deducted") val creditsDeducted: Int = 0,
+    @SerialName("tokens_consumed") val tokensConsumed: Int = 0,
     @SerialName("created_at") val createdAt: String
 )
 
