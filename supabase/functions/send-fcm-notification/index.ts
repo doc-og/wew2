@@ -83,7 +83,7 @@ function buildNotification(type: string, data: Record<string, string>): { title:
       }
     case 'device_admin_revoked':
       return {
-        title: '⚠️ security alert',
+        title: 'security alert',
         body: 'wew device admin was disabled — phone is now in emergency-only mode',
       }
     case 'daily_summary':
@@ -104,10 +104,15 @@ function buildNotification(type: string, data: Record<string, string>): { title:
     case 'check_in': {
       const msg = data?.message ? data.message : 'your child shared their location'
       return {
-        title: '📍 Child checked in',
+        title: 'Child checked in',
         body: msg,
       }
     }
+    case 'unknown_incoming_call':
+      return {
+        title: 'unknown caller blocked',
+        body: `someone tried to call your child (${data.caller ?? 'unknown'})`,
+      }
     default:
       return { title: 'wew alert', body: type }
   }

@@ -13,6 +13,7 @@ import com.wew.launcher.data.model.WewContact
 import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.sms.SmsRepository
 import com.wew.launcher.sms.SmsThread
+import com.wew.launcher.telecom.WewPhoneAllowlist
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -128,6 +129,8 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                     }
                 }
 
+                syncCallAllowlist(parentPhone, approvedContacts)
+
                 _uiState.update {
                     it.copy(
                         pinned = pinned,
@@ -209,6 +212,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                         ?: prefs.getString("parent_phone", null)
                     val threads = smsRepo.getThreads()
                     val items = buildConversationItems(threads, contacts, parentPhone, metaByThread)
+                    syncCallAllowlist(parentPhone, contacts)
                     val (pinned, rest) = items.partition { it.isPinned }
                     val (approved, quarantine) = rest.partition { it.isApproved }
                     _uiState.update { s ->
@@ -400,11 +404,17 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun normalizePhone(phone: String): String =
-        phone.replace(Regex("[^\\d+]"), "").let {
-            // Strip leading country code for US numbers for fuzzy matching
-            if (it.startsWith("+1") && it.length == 12) it.substring(2) else it
+    private fun normalizePhone(phone: String): String = WewPhoneAllowlist.normalize(phone)
+
+    private fun syncCallAllowlist(parentPhone: String?, approvedContacts: List<WewContact>) {
+        val callAllow = buildSet {
+            parentPhone?.let { add(WewPhoneAllowlist.normalize(it)) }
+            for (c in approvedContacts) {
+                c.phone?.let { add(WewPhoneAllowlist.normalize(it)) }
+            }
         }
+        WewPhoneAllowlist.write(prefs, callAllow)
+    }
 
     private fun formatPhoneDisplay(raw: String): String {
         val digits = raw.replace(Regex("[^\\d]"), "")

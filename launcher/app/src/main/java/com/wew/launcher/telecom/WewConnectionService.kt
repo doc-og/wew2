@@ -85,6 +85,7 @@ class WewConnectionService : ConnectionService() {
                     if (!activated && !released) {
                         activated = true
                         setActive()
+                        WewCallManager.onCallRadioActive()
                     }
                 }
                 TelephonyManager.CALL_STATE_IDLE -> {

@@ -87,6 +87,7 @@ import com.wew.launcher.ui.theme.OnNight
 import com.wew.launcher.ui.theme.WarningAmber
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.ui.viewmodel.ChatBubbleItem
+import com.wew.launcher.telecom.CallParticipant
 import com.wew.launcher.telecom.WewCallManager
 import com.wew.launcher.ui.viewmodel.ChatViewModel
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
@@ -152,10 +153,29 @@ fun ChatScreen(
     // Place call in-app (self-managed telecom — no system dialer)
     LaunchedEffect(state.pendingCall) {
         state.pendingCall?.let { address ->
+            val groupMembers = buildList {
+                if (state.selectedRecipients.isNotEmpty()) {
+                    for (c in state.selectedRecipients) {
+                        val p = c.phone?.trim().orEmpty()
+                        if (p.isEmpty()) continue
+                        add(CallParticipant(c.name, p))
+                    }
+                } else {
+                    add(
+                        CallParticipant(
+                            state.recipientName.ifBlank { displayName },
+                            address
+                        )
+                    )
+                }
+            }
             WewCallManager.placeCall(
-                context,
-                address,
-                state.recipientName.ifBlank { displayName }
+                context = context,
+                rawNumber = address,
+                displayLabel = state.recipientName.ifBlank { displayName },
+                groupMembers = groupMembers,
+                chargeMetering = true,
+                tokenBalanceHint = state.currentTokens
             )
             vm.clearPendingCall()
         }

@@ -127,6 +127,16 @@
             </intent-filter>
         </service>
 
+        <!-- Reject unknown incoming callers + notify parent (requires Call Screening role) -->
+        <service
+            android:name=".telecom.WewCallScreeningService"
+            android:exported="true"
+            android:permission="android.permission.BIND_SCREENING_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.CallScreeningService" />
+            </intent-filter>
+        </service>
+
         <!-- Device Admin receiver -->
         <receiver
             android:name=".service.WewDeviceAdminReceiver"

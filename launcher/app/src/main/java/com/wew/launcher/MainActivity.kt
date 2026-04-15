@@ -1,6 +1,7 @@
 package com.wew.launcher
 
 import android.Manifest
+import android.app.role.RoleManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
         startForegroundService()
+        maybeRequestCallScreeningRole()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -193,8 +195,25 @@ class MainActivity : ComponentActivity() {
 
         if (missing.isEmpty()) {
             startForegroundService()
+            maybeRequestCallScreeningRole()
         } else {
             permissionLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    /** One-time prompt: set WeW as call screening app so unknown numbers are blocked + parent notified. */
+    private fun maybeRequestCallScreeningRole() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val prefs = getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("wew_prompted_call_screening", false)) return
+        val rm = getSystemService(RoleManager::class.java) ?: return
+        if (rm.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)) {
+            prefs.edit().putBoolean("wew_prompted_call_screening", true).apply()
+            return
+        }
+        prefs.edit().putBoolean("wew_prompted_call_screening", true).apply()
+        runCatching {
+            startActivity(rm.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING))
         }
     }
 

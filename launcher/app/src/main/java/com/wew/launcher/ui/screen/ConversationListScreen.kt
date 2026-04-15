@@ -110,7 +110,14 @@ fun ConversationListScreen(
                 )
             }
             val label = state.parentName.takeUnless { it.isNullOrBlank() } ?: "parent"
-            WewCallManager.placeCall(context, number, label)
+            WewCallManager.placeCall(
+                context = context,
+                rawNumber = number,
+                displayLabel = label,
+                groupMembers = emptyList(),
+                chargeMetering = false,
+                tokenBalanceHint = state.currentTokens
+            )
             viewModel.clearPendingEmergencyCall()
         }
     }

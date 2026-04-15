@@ -312,7 +312,14 @@ class ChatViewModel(
                 actionType = ActionType.CALL_MADE.value,
                 appName = "Phone"
             )
-            _uiState.update { it.copy(pendingCall = addr) }
+            val device = runCatching { repo.getDevice(deviceId) }.getOrNull()
+            _uiState.update {
+                it.copy(
+                    pendingCall = addr,
+                    currentTokens = device?.currentTokens ?: it.currentTokens,
+                    tokensExhausted = (device?.currentTokens ?: it.currentTokens) <= 0
+                )
+            }
         }
     }
 
