@@ -12,6 +12,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +30,7 @@ import com.wew.launcher.ui.screen.ConversationListScreen
 import com.wew.launcher.ui.screen.MapScreen
 import com.wew.launcher.ui.screen.SetupActivity
 import com.wew.launcher.ui.screen.WebViewScreen
+import com.wew.launcher.ui.screen.WewInCallOverlay
 import com.wew.launcher.ui.theme.WewLauncherTheme
 import com.wew.launcher.ui.viewmodel.CheckInViewModel
 import com.wew.launcher.ui.viewmodel.ContactsViewModel
@@ -79,6 +81,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             WewLauncherTheme {
+                Box(Modifier.fillMaxSize()) {
                 val convListViewModel: ConversationListViewModel = viewModel()
                 val contactsViewModel: ContactsViewModel = viewModel()
                 val checkInViewModel: CheckInViewModel = viewModel()
@@ -160,6 +163,9 @@ class MainActivity : ComponentActivity() {
                         MapScreen(onBack = { screen = WewScreen.ConversationList })
                     }
                 }
+
+                WewInCallOverlay()
+                }
             }
         }
     }
@@ -170,6 +176,9 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.READ_SMS,
             Manifest.permission.RECEIVE_SMS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.MANAGE_OWN_CALLS,
         ).apply {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.POST_NOTIFICATIONS)

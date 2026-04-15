@@ -1,7 +1,6 @@
 package com.wew.launcher.ui.screen
 
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.telephony.SmsManager
 import androidx.compose.animation.AnimatedVisibility
@@ -73,6 +72,7 @@ import com.wew.launcher.ui.theme.OnNight
 import com.wew.launcher.ui.theme.WarningAmber
 import com.wew.launcher.ui.viewmodel.ConversationItem
 import com.wew.launcher.ui.viewmodel.ConversationListUiState
+import com.wew.launcher.telecom.WewCallManager
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -94,10 +94,9 @@ fun ConversationListScreen(
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
-    // Launch dialer + send SOS SMS when SOS is confirmed
+    // Place parent call in-app + send SOS SMS when SOS is confirmed
     LaunchedEffect(state.pendingEmergencyCall) {
         state.pendingEmergencyCall?.let { number ->
-            // Send the SOS SMS first
             runCatching {
                 @Suppress("DEPRECATION")
                 val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
@@ -110,12 +109,8 @@ fun ConversationListScreen(
                     null, null
                 )
             }
-            // Then open the dialer
-            val intent = Intent(Intent.ACTION_DIAL).apply {
-                data = Uri.parse("tel:$number")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            context.startActivity(intent)
+            val label = state.parentName.takeUnless { it.isNullOrBlank() } ?: "parent"
+            WewCallManager.placeCall(context, number, label)
             viewModel.clearPendingEmergencyCall()
         }
     }
@@ -702,7 +697,6 @@ private fun SosConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
     val displayName = parentName.takeUnless { it.isNullOrBlank() } ?: "your parent"
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -726,12 +720,7 @@ private fun SosConfirmDialog(
                     text = parentPhone,
                     color = Color(0xFF93C5FD),
                     fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.clickable {
-                        context.startActivity(
-                            Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(parentPhone)}"))
-                        )
-                    }
+                    fontWeight = FontWeight.Medium
                 )
             }
         },

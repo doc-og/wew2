@@ -1,8 +1,6 @@
 package com.wew.launcher.ui.screen
 
 import android.app.Application
-import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -89,6 +87,7 @@ import com.wew.launcher.ui.theme.OnNight
 import com.wew.launcher.ui.theme.WarningAmber
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.ui.viewmodel.ChatBubbleItem
+import com.wew.launcher.telecom.WewCallManager
 import com.wew.launcher.ui.viewmodel.ChatViewModel
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
 import java.text.SimpleDateFormat
@@ -150,14 +149,14 @@ fun ChatScreen(
 
     var showRecipientPicker by remember { mutableStateOf(false) }
 
-    // Launch phone dialer when a call is confirmed
+    // Place call in-app (self-managed telecom — no system dialer)
     LaunchedEffect(state.pendingCall) {
         state.pendingCall?.let { address ->
-            val intent = Intent(Intent.ACTION_DIAL).apply {
-                data = Uri.parse("tel:$address")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            context.startActivity(intent)
+            WewCallManager.placeCall(
+                context,
+                address,
+                state.recipientName.ifBlank { displayName }
+            )
             vm.clearPendingCall()
         }
     }

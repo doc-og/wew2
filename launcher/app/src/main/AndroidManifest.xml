@@ -22,6 +22,9 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- Self-managed ConnectionService (in-app calls without system dialer) -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
 
     <!-- SMS / MMS — full set required to be the default messaging app -->
     <uses-permission android:name="android.permission.SEND_SMS" />
@@ -113,6 +116,16 @@
             android:name=".service.LauncherForegroundService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!-- Self-managed telecom: outgoing calls stay in WeW (no platform dialer) -->
+        <service
+            android:name=".telecom.WewConnectionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
 
         <!-- Device Admin receiver -->
         <receiver

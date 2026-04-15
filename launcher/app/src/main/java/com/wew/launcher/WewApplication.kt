@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import com.wew.launcher.data.SupabaseClient
+import com.wew.launcher.telecom.WewCallManager
 
 class WewApplication : Application() {
 
@@ -14,6 +15,7 @@ class WewApplication : Application() {
             url = BuildConfig.SUPABASE_URL,
             key = BuildConfig.SUPABASE_ANON_KEY
         )
+        WewCallManager.ensurePhoneAccountRegistered(this)
         createNotificationChannels()
     }
 
