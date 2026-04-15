@@ -98,7 +98,22 @@ class MainActivity : ComponentActivity() {
                                 checkInViewModel.reset()
                                 showCheckIn = true
                             },
-                            onOpenMap = { screen = WewScreen.Map }
+                            onOpenMap = { screen = WewScreen.Map },
+                            onOpenCalendar = { pkg ->
+                                val intent = packageManager.getLaunchIntentForPackage(pkg)
+                                    ?: Intent(Intent.ACTION_MAIN).apply {
+                                        addCategory(Intent.CATEGORY_APP_CALENDAR)
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                startActivity(intent)
+                            },
+                            onOpenWeather = { pkg ->
+                                val intent = packageManager.getLaunchIntentForPackage(pkg)
+                                    ?: return@ConversationListScreen
+                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                startActivity(intent)
+                            }
                         )
 
                         if (showContacts) {

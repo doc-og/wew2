@@ -62,7 +62,11 @@ data class ConversationListUiState(
     /** Remaining attempts before the passcode dialog auto-dismisses. */
     val passcodeAttemptsLeft: Int = 3,
     /** Set to true when passcode verified — UI launches parent app then clears. */
-    val pendingLaunchParentApp: Boolean = false
+    val pendingLaunchParentApp: Boolean = false,
+    /** Package name of the whitelisted calendar app, null if not approved. */
+    val approvedCalendarPackage: String? = null,
+    /** Package name of the whitelisted weather app, null if not approved. */
+    val approvedWeatherPackage: String? = null,
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -103,6 +107,12 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 val (pinned, rest) = items.partition { it.isPinned }
                 val (approved, quarantine) = rest.partition { it.isApproved }
 
+                // Detect whitelisted calendar / weather apps
+                val whitelistedPkgs = repo.getWhitelistedApps(deviceId)
+                    .map { it.packageName }.toSet()
+                val calendarPkg = CALENDAR_PACKAGES.firstOrNull { it in whitelistedPkgs }
+                val weatherPkg = WEATHER_PACKAGES.firstOrNull { it in whitelistedPkgs }
+
                 _uiState.update {
                     it.copy(
                         pinned = pinned,
@@ -114,7 +124,9 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                         tokensExhausted = device.currentTokens <= 0,
                         deviceId = deviceId,
                         parentPhoneNumber = parentPhone,
-                        approvedContacts = approvedContacts
+                        approvedContacts = approvedContacts,
+                        approvedCalendarPackage = calendarPkg,
+                        approvedWeatherPackage = weatherPkg
                     )
                 }
             }.onFailure {
@@ -387,6 +399,17 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     }
 
     companion object {
+        val CALENDAR_PACKAGES = listOf(
+            "com.google.android.calendar",
+            "com.android.calendar"
+        )
+        val WEATHER_PACKAGES = listOf(
+            "com.google.android.apps.weather",
+            "com.weather.Weather",
+            "com.yahoo.mobile.client.android.weather",
+            "com.samsung.android.app.weather"
+        )
+
         val AvatarPalette = listOf(
             Color(0xFF6B4EFF),   // violet
             Color(0xFF4E9FFF),   // blue

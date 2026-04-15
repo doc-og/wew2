@@ -1,5 +1,8 @@
 package com.wew.launcher.ui.screen
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -61,6 +64,15 @@ fun CheckInScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
+    // System permission launcher — used when step == NEEDS_PERMISSION
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val granted = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                      perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) viewModel.onPermissionGranted() else viewModel.onPermissionDenied()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -69,6 +81,18 @@ fun CheckInScreen(
             .navigationBarsPadding()
     ) {
         when (uiState.step) {
+            CheckInStep.NEEDS_PERMISSION -> NeedsPermissionContent(
+                onRequestPermission = {
+                    permissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+                },
+                onCancel = onClose
+            )
+
             CheckInStep.GETTING_LOCATION -> GettingLocationContent()
 
             CheckInStep.CONFIRM -> ConfirmContent(
@@ -89,6 +113,90 @@ fun CheckInScreen(
                 errorMessage = uiState.errorMessage ?: "Something went wrong.",
                 onRetry = viewModel::onRetry,
                 onCancel = onClose
+            )
+        }
+    }
+}
+
+@Composable
+private fun NeedsPermissionContent(
+    onRequestPermission: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(88.dp)
+                .clip(CircleShape)
+                .background(ElectricViolet.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.LocationOn,
+                contentDescription = null,
+                tint = ElectricViolet,
+                modifier = Modifier.size(52.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = "location access needed",
+            fontSize = 22.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = OnNight,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = "wew needs your location to send a check-in to your parent. Please allow location access when prompted.",
+            fontSize = 15.sp,
+            color = OnNight.copy(alpha = 0.65f),
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp
+        )
+
+        Spacer(modifier = Modifier.height(36.dp))
+
+        Button(
+            onClick = onRequestPermission,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = ElectricViolet,
+                contentColor = Color.White
+            ),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(58.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.LocationOn,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = "  allow location",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TextButton(onClick = onCancel) {
+            Text(
+                text = "cancel",
+                fontSize = 16.sp,
+                color = OnNight.copy(alpha = 0.5f)
             )
         }
     }

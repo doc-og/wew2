@@ -1,9 +1,12 @@
 package com.wew.launcher.ui.viewmodel
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.location.LocationServices
@@ -31,7 +34,7 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-enum class CheckInStep { GETTING_LOCATION, CONFIRM, SUBMITTING, SUCCESS, ERROR }
+enum class CheckInStep { NEEDS_PERMISSION, GETTING_LOCATION, CONFIRM, SUBMITTING, SUCCESS, ERROR }
 
 data class CheckInUiState(
     val step: CheckInStep = CheckInStep.GETTING_LOCATION,
@@ -56,7 +59,36 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
     init {
         val deviceId = prefs.getString("device_id", "") ?: ""
         _uiState.update { it.copy(deviceId = deviceId) }
+        checkPermissionAndStart()
+    }
+
+    /** Checks if location permission is granted; shows permission gate if not. */
+    fun checkPermissionAndStart() {
+        val ctx = getApplication<Application>()
+        val granted = ContextCompat.checkSelfPermission(
+            ctx, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                ctx, Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        if (granted) requestLocation() else {
+            _uiState.update { it.copy(step = CheckInStep.NEEDS_PERMISSION) }
+        }
+    }
+
+    /** Called by the UI after the system permission dialog grants location. */
+    fun onPermissionGranted() {
         requestLocation()
+    }
+
+    /** Called by the UI when the user permanently denies location. */
+    fun onPermissionDenied() {
+        _uiState.update {
+            it.copy(
+                step = CheckInStep.ERROR,
+                errorMessage = "Location permission is required for check-in.\n\nPlease enable it in Settings → Apps → wew → Permissions."
+            )
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -118,11 +150,11 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(message = text) }
     }
 
-    /** Called when the Check In screen is shown anew — resets state and re-fetches location. */
+    /** Called when the Check In screen is shown anew — resets state and re-checks permission. */
     fun reset() {
         val deviceId = prefs.getString("device_id", "") ?: ""
         _uiState.value = CheckInUiState(deviceId = deviceId)
-        requestLocation()
+        checkPermissionAndStart()
     }
 
     fun onRetry() {

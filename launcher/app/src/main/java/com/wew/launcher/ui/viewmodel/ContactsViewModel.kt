@@ -40,9 +40,17 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
             _uiState.update { it.copy(isLoading = true, deviceId = deviceId) }
             val contacts = repo.getContacts(deviceId)
             val requests = repo.getAuthRequests(deviceId)
-            val requestMap = requests.associate { it.contactId to it.status }
+
+            // Build merged auth map: auth_requests rows first, then override with
+            // contacts.is_authorized = true (set when parent approves in parent app).
+            val mergedMap = buildMap<String, String> {
+                for (req in requests) put(req.contactId, req.status)
+                for (contact in contacts) {
+                    if (contact.isAuthorized) put(contact.id ?: "", "approved")
+                }
+            }
             _uiState.update {
-                it.copy(contacts = contacts, authRequests = requestMap, isLoading = false)
+                it.copy(contacts = contacts, authRequests = mergedMap, isLoading = false)
             }
         }
     }

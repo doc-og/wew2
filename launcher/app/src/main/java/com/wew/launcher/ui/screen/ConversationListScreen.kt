@@ -3,10 +3,14 @@ package com.wew.launcher.ui.screen
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,7 +83,9 @@ fun ConversationListScreen(
     onOpenThread: (threadId: Long, address: String, displayName: String) -> Unit,
     onOpenContacts: () -> Unit,
     onOpenCheckIn: () -> Unit,
-    onOpenMap: () -> Unit = {}
+    onOpenMap: () -> Unit = {},
+    onOpenCalendar: (String) -> Unit = {},
+    onOpenWeather: (String) -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -235,14 +241,29 @@ fun ConversationListScreen(
         }
     }
 
-    // Navigation menu sheet
-    if (state.showNavMenu) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = { viewModel.hideNavMenu() },
-            sheetState = sheetState,
-            containerColor = Color(0xFF13131F),
-            dragHandle = null
+    // Navigation menu — slides DOWN from top (scrim fades, sheet slides)
+    AnimatedVisibility(
+        visible = state.showNavMenu,
+        enter = fadeIn(tween(200)),
+        exit = fadeOut(tween(200))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.55f))
+                .clickable { viewModel.hideNavMenu() }
+        )
+    }
+    AnimatedVisibility(
+        visible = state.showNavMenu,
+        enter = slideInVertically(tween(280)) { -it } + fadeIn(tween(200)),
+        exit = slideOutVertically(tween(240)) { -it } + fadeOut(tween(200))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF13131F))
+                .statusBarsPadding()
         ) {
             NavigationMenuSheet(
                 currentTokens = state.currentTokens,
@@ -252,6 +273,12 @@ fun ConversationListScreen(
                 onCheckIn = { viewModel.hideNavMenu(); onOpenCheckIn() },
                 onMap = { viewModel.hideNavMenu(); onOpenMap() },
                 onParentAccess = { viewModel.hideNavMenu(); viewModel.showParentPasscodeDialog() },
+                onOpenCalendar = state.approvedCalendarPackage?.let { pkg ->
+                    { viewModel.hideNavMenu(); onOpenCalendar(pkg) }
+                },
+                onOpenWeather = state.approvedWeatherPackage?.let { pkg ->
+                    { viewModel.hideNavMenu(); onOpenWeather(pkg) }
+                },
                 onSos = { viewModel.hideNavMenu(); viewModel.showSosDialog() }
             )
         }
@@ -599,6 +626,10 @@ fun NavigationMenuSheet(
     onCheckIn: () -> Unit,
     onMap: () -> Unit = {},
     onParentAccess: () -> Unit = {},
+    /** Non-null only when the calendar app is approved by the parent. */
+    onOpenCalendar: (() -> Unit)? = null,
+    /** Non-null only when the weather app is approved by the parent. */
+    onOpenWeather: (() -> Unit)? = null,
     onSos: () -> Unit
 ) {
     Column(
@@ -650,6 +681,8 @@ fun NavigationMenuSheet(
         NavItem("Contacts", onClick = onContacts)
         NavItem("Check In", onClick = onCheckIn)
         NavItem("Map", onClick = onMap)
+        onOpenCalendar?.let { cb -> NavItem("Calendar", onClick = cb) }
+        onOpenWeather?.let { cb -> NavItem("Weather", onClick = cb) }
         NavItem("Parent App", onClick = onParentAccess)
 
         // Divider before emergency option
