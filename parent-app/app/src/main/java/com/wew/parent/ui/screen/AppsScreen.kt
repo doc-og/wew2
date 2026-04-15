@@ -68,6 +68,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsOff
 import com.wew.parent.data.model.AppInfo
 import com.wew.parent.data.repository.ParentRepository
 import com.wew.parent.ui.theme.BrandViolet
@@ -208,6 +210,19 @@ fun AppsScreen(deviceId: String) {
                         }
                         scope.launch {
                             runCatching { repo.updateAppWhitelist(app.id, newState) }
+                            // Maps enabled → request location sharing from device
+                            if (newState && app.packageName == "com.google.android.apps.maps") {
+                                runCatching { repo.requestLocationSharing(deviceId) }
+                            }
+                        }
+                    },
+                    onToggleNotifications = { app ->
+                        val newState = !app.notificationsEnabled
+                        apps = apps.map {
+                            if (it.id == app.id) it.copy(notificationsEnabled = newState) else it
+                        }
+                        scope.launch {
+                            runCatching { repo.updateAppNotifications(app.id, newState) }
                         }
                     }
                 )
@@ -462,7 +477,8 @@ private fun FilterTabRow(
 
 private fun LazyListScope.appListItems(
     apps: List<AppInfo>,
-    onToggle: (AppInfo) -> Unit
+    onToggle: (AppInfo) -> Unit,
+    onToggleNotifications: (AppInfo) -> Unit = {}
 ) {
     // Group into Allowed then Blocked for visual clarity
     val allowed = apps.filter { it.isWhitelisted }
@@ -489,7 +505,11 @@ private fun LazyListScope.appListItems(
                     .padding(bottom = 16.dp)
             ) {
                 allowed.forEachIndexed { index, app ->
-                    AppRow(app = app, onToggle = { onToggle(app) })
+                    AppRow(
+                        app = app,
+                        onToggle = { onToggle(app) },
+                        onToggleNotifications = { onToggleNotifications(app) }
+                    )
                     if (index < allowed.lastIndex) {
                         Divider(
                             color = Color(0xFFF0F0F8),
@@ -522,7 +542,11 @@ private fun LazyListScope.appListItems(
                     .padding(bottom = 16.dp)
             ) {
                 blocked.forEachIndexed { index, app ->
-                    AppRow(app = app, onToggle = { onToggle(app) })
+                    AppRow(
+                        app = app,
+                        onToggle = { onToggle(app) },
+                        onToggleNotifications = { onToggleNotifications(app) }
+                    )
                     if (index < blocked.lastIndex) {
                         Divider(
                             color = Color(0xFFF0F0F8),
@@ -579,71 +603,109 @@ private fun SectionHeader(
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun AppRow(app: AppInfo, onToggle: () -> Unit) {
-    // Deterministic pastel avatar color from app name
+private fun AppRow(
+    app: AppInfo,
+    onToggle: () -> Unit,
+    onToggleNotifications: () -> Unit = {}
+) {
     val avatarColor = avatarColorFor(app.appName)
     val switchAction = if (app.isWhitelisted) "Block ${app.appName}" else "Allow ${app.appName}"
 
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .semantics {
-                contentDescription = "${app.appName}, ${if (app.isWhitelisted) "allowed" else "blocked"}. Double-tap to ${if (app.isWhitelisted) "block" else "allow"}."
-            },
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
-        // Avatar — first letter of app name
-        Box(
+        Row(
             modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(avatarColor),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .semantics {
+                    contentDescription = "${app.appName}, ${if (app.isWhitelisted) "allowed" else "blocked"}."
+                },
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = app.appName.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
+            // Avatar
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(avatarColor),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = app.appName.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+
+            Spacer(Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = app.appName,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF1A1A2E),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = app.packageName,
+                    fontSize = 12.sp,
+                    color = Color(0xFF9999AA),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            // Notifications bell — only shown when app is allowed
+            if (app.isWhitelisted) {
+                IconButton(
+                    onClick = onToggleNotifications,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = if (app.notificationsEnabled)
+                            Icons.Default.Notifications
+                        else
+                            Icons.Default.NotificationsOff,
+                        contentDescription = if (app.notificationsEnabled)
+                            "Disable notifications for ${app.appName}"
+                        else
+                            "Enable notifications for ${app.appName}",
+                        tint = if (app.notificationsEnabled) BrandViolet else Color(0xFFCCCCDD),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            // Whitelist toggle
+            Switch(
+                checked = app.isWhitelisted,
+                onCheckedChange = { onToggle() },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = SafetyGreen,
+                    uncheckedThumbColor = Color.White,
+                    uncheckedTrackColor = Color(0xFFCCCCDD)
+                ),
+                modifier = Modifier.semantics { contentDescription = switchAction }
             )
         }
 
-        Spacer(Modifier.width(14.dp))
-
-        // App name + package
-        Column(modifier = Modifier.weight(1f)) {
+        // Maps location note
+        if (app.packageName == "com.google.android.apps.maps" && app.isWhitelisted) {
             Text(
-                text = app.appName,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF1A1A2E),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = app.packageName,
-                fontSize = 12.sp,
+                text = "Enabling Maps will request location sharing from the device.",
+                fontSize = 11.sp,
                 color = Color(0xFF9999AA),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                modifier = Modifier.padding(start = 58.dp, top = 2.dp)
             )
         }
-
-        Spacer(Modifier.width(10.dp))
-
-        // Toggle switch — full-size touch target via Switch itself
-        Switch(
-            checked = app.isWhitelisted,
-            onCheckedChange = { onToggle() },
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = SafetyGreen,
-                uncheckedThumbColor = Color.White,
-                uncheckedTrackColor = Color(0xFFCCCCDD)
-            ),
-            modifier = Modifier.semantics { contentDescription = switchAction }
-        )
     }
 }
 

@@ -3,12 +3,17 @@ package com.wew.parent.data.repository
 import com.wew.parent.data.SupabaseClient
 import com.wew.parent.data.model.ActivityLogEntry
 import com.wew.parent.data.model.AppInfo
+import com.wew.parent.data.model.Contact
+import com.wew.parent.data.model.ContactAuthRequest
+import com.wew.parent.data.model.ConversationMeta
 import com.wew.parent.data.model.CreditChange
 import com.wew.parent.data.model.Device
 import com.wew.parent.data.model.LocationPoint
 import com.wew.parent.data.model.DevicePasscode
+import com.wew.parent.data.model.MessageLogEntry
 import com.wew.parent.data.model.NotificationConfig
 import com.wew.parent.data.model.Schedule
+import com.wew.parent.data.model.UrlAccessRequest
 import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
@@ -188,6 +193,19 @@ class ParentRepository {
         ) { filter { eq("id", appId) } }
     }
 
+    suspend fun updateAppNotifications(appId: String, enabled: Boolean) {
+        supabase.postgrest["apps"].update(
+            buildJsonObject { put("notifications_enabled", enabled) }
+        ) { filter { eq("id", appId) } }
+    }
+
+    /** Signal the child device to prompt for location permission. */
+    suspend fun requestLocationSharing(deviceId: String) {
+        supabase.postgrest["devices"].update(
+            buildJsonObject { put("location_sharing_requested", true) }
+        ) { filter { eq("id", deviceId) } }
+    }
+
     suspend fun addApp(deviceId: String, packageName: String, appName: String): AppInfo {
         supabase.postgrest["apps"].insert(
             buildJsonObject {
@@ -257,5 +275,127 @@ class ParentRepository {
     suspend fun removePasscode(deviceId: String) {
         supabase.postgrest["device_passcode"]
             .delete { filter { eq("device_id", deviceId) } }
+    }
+
+    // ── Contacts ──────────────────────────────────────────────────────────────
+
+    suspend fun getContacts(deviceId: String): List<Contact> {
+        return supabase.postgrest["contacts"]
+            .select(Columns.ALL) {
+                filter { eq("device_id", deviceId) }
+                order("created_at", Order.ASCENDING)
+            }
+            .decodeList()
+    }
+
+    suspend fun upsertContact(contact: Contact) {
+        supabase.postgrest["contacts"].upsert(contact, onConflict = "id")
+    }
+
+    suspend fun deleteContact(contactId: String) {
+        supabase.postgrest["contacts"]
+            .delete { filter { eq("id", contactId) } }
+    }
+
+    suspend fun updateContactStatus(contactId: String, status: String) {
+        supabase.postgrest["contacts"].update(
+            buildJsonObject {
+                put("status", status)
+                put("is_authorized", status == "approved")
+            }
+        ) { filter { eq("id", contactId) } }
+    }
+
+    /** Seed the parent as an approved contact if no contacts exist yet. */
+    suspend fun seedParentContact(deviceId: String) {
+        val email = supabase.auth.currentUserOrNull()?.email ?: return
+        val existing = runCatching { getContacts(deviceId) }.getOrElse { emptyList() }
+        if (existing.any { it.relationship == "parent" }) return
+        supabase.postgrest["contacts"].insert(
+            buildJsonObject {
+                put("device_id", deviceId)
+                put("name", email)
+                put("first_name", "Parent")
+                put("email", email)
+                put("relationship", "parent")
+                put("status", "approved")
+                put("is_authorized", true)
+            }
+        )
+    }
+
+    suspend fun getPendingContactRequests(deviceId: String): List<Contact> {
+        return supabase.postgrest["contacts"]
+            .select(Columns.ALL) {
+                filter {
+                    eq("device_id", deviceId)
+                    eq("status", "requested")
+                }
+                order("created_at", Order.DESCENDING)
+            }
+            .decodeList()
+    }
+
+    // ── URL access requests ───────────────────────────────────────────────────
+
+    suspend fun getUrlAccessRequests(deviceId: String): List<UrlAccessRequest> {
+        return supabase.postgrest["url_access_requests"]
+            .select(Columns.ALL) {
+                filter { eq("device_id", deviceId) }
+                order("created_at", Order.DESCENDING)
+                limit(100)
+            }
+            .decodeList()
+    }
+
+    suspend fun updateUrlRequestStatus(requestId: String, status: String) {
+        supabase.postgrest["url_access_requests"].update(
+            buildJsonObject { put("status", status) }
+        ) { filter { eq("id", requestId) } }
+    }
+
+    /** When approving a URL, also add it as an allow filter for the device. */
+    suspend fun approveUrlAndAddFilter(deviceId: String, requestId: String, url: String) {
+        updateUrlRequestStatus(requestId, "approved")
+        val host = runCatching {
+            java.net.URI(url).host?.removePrefix("www.") ?: url
+        }.getOrElse { url }
+        supabase.postgrest["url_filters"].insert(
+            buildJsonObject {
+                put("device_id", deviceId)
+                put("url_pattern", host)
+                put("filter_type", "allow")
+                put("is_global", false)
+                put("created_by", "parent")
+            }
+        )
+    }
+
+    // ── Message log ───────────────────────────────────────────────────────────
+
+    suspend fun getConversations(deviceId: String): List<ConversationMeta> {
+        return runCatching {
+            supabase.postgrest["conversations"]
+                .select(Columns.ALL) {
+                    filter { eq("device_id", deviceId) }
+                    order("created_at", Order.DESCENDING)
+                }
+                .decodeList<ConversationMeta>()
+        }.getOrElse { emptyList() }
+    }
+
+    suspend fun getMessagesForThread(deviceId: String, threadId: Long, limit: Int = 50): List<MessageLogEntry> {
+        return runCatching {
+            supabase.postgrest["messages"]
+                .select(Columns.ALL) {
+                    filter {
+                        eq("device_id", deviceId)
+                        eq("thread_id", threadId)
+                    }
+                    order("created_at", Order.DESCENDING)
+                    limit(limit.toLong())
+                }
+                .decodeList<MessageLogEntry>()
+        }.getOrElse { emptyList() }
     }
 }

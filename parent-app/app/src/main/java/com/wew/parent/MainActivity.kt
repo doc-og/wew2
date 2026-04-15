@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Message
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -50,10 +53,13 @@ import androidx.navigation.compose.rememberNavController
 import com.wew.parent.data.repository.ParentRepository
 import com.wew.parent.ui.theme.ParentBackground
 import com.wew.parent.ui.screen.AppsScreen
+import com.wew.parent.ui.screen.ContactsScreen
 import com.wew.parent.ui.screen.DashboardScreen
 import com.wew.parent.ui.screen.LoginScreen
+import com.wew.parent.ui.screen.MessagesScreen
 import com.wew.parent.ui.screen.RegisterDeviceScreen
 import com.wew.parent.ui.screen.SettingsScreen
+import com.wew.parent.ui.screen.UrlApprovalsScreen
 import com.wew.parent.ui.theme.BrandViolet
 import com.wew.parent.ui.theme.WewParentTheme
 import kotlinx.coroutines.delay
@@ -75,8 +81,11 @@ data class NavItem(val route: String, val label: String, val icon: ImageVector)
 
 val navItems = listOf(
     NavItem("dashboard", "Dashboard", Icons.Default.Dashboard),
-    NavItem("apps", "Apps", Icons.Default.Apps),
-    NavItem("settings", "Settings", Icons.Default.Settings)
+    NavItem("apps",      "Apps",      Icons.Default.Apps),
+    NavItem("contacts",  "Contacts",  Icons.Default.People),
+    NavItem("messages",  "Messages",  Icons.Default.Message),
+    NavItem("urls",      "URLs",      Icons.Default.Link),
+    NavItem("settings",  "Settings",  Icons.Default.Settings)
 )
 
 @Composable
@@ -275,6 +284,15 @@ fun WewParentApp() {
                 }
                 composable("apps") {
                     if (deviceId.isNotEmpty()) AppsScreen(deviceId = deviceId)
+                }
+                composable("contacts") {
+                    if (deviceId.isNotEmpty()) ContactsScreen(deviceId = deviceId)
+                }
+                composable("messages") {
+                    if (deviceId.isNotEmpty()) MessagesScreen(deviceId = deviceId)
+                }
+                composable("urls") {
+                    if (deviceId.isNotEmpty()) UrlApprovalsScreen(deviceId = deviceId)
                 }
                 composable("settings") {
                     SettingsScreen(userId = userId, deviceId = deviceId)

@@ -56,7 +56,8 @@ data class AppInfo(
     @SerialName("app_name") val appName: String,
     @SerialName("is_whitelisted") val isWhitelisted: Boolean = false,
     @SerialName("is_system_app") val isSystemApp: Boolean = false,
-    @SerialName("credit_cost") val creditCost: Int = 1
+    @SerialName("credit_cost") val creditCost: Int = 1,
+    @SerialName("notifications_enabled") val notificationsEnabled: Boolean = false
 )
 
 @Serializable
@@ -88,4 +89,84 @@ data class DevicePasscode(
     @SerialName("passcode_hash") val passcodeHash: String,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null
+)
+
+// ── Contacts ──────────────────────────────────────────────────────────────────
+
+@Serializable
+data class Contact(
+    val id: String?                       = null,
+    @SerialName("device_id")    val deviceId: String,
+    /** Required. Display fallback when first_name is blank. */
+    val name: String                      = "",
+    @SerialName("first_name")   val firstName: String?    = null,
+    @SerialName("last_name")    val lastName: String?     = null,
+    val nickname: String?                 = null,
+    val phone: String?                    = null,
+    val email: String?                    = null,
+    val relationship: String?             = null,
+    val birthday: String?                 = null,   // ISO date "YYYY-MM-DD"
+    @SerialName("photo_url")    val photoUrl: String?     = null,
+    @SerialName("is_authorized") val isAuthorized: Boolean = false,
+    /** requested | approved | blocked */
+    val status: String                    = "approved",
+    val notes: String?                    = null,
+    @SerialName("created_at")   val createdAt: String?    = null,
+    @SerialName("updated_at")   val updatedAt: String?    = null
+) {
+    val displayName: String get() =
+        listOfNotNull(firstName?.trim(), lastName?.trim())
+            .joinToString(" ")
+            .ifBlank { nickname ?: name }
+}
+
+@Serializable
+data class ContactAuthRequest(
+    val id: String,
+    @SerialName("device_id")  val deviceId: String,
+    @SerialName("contact_id") val contactId: String,
+    /** pending | approved | denied */
+    val status: String,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("updated_at") val updatedAt: String? = null
+)
+
+// ── URL access requests ───────────────────────────────────────────────────────
+
+@Serializable
+data class UrlAccessRequest(
+    val id: String,
+    @SerialName("device_id")  val deviceId: String,
+    val url: String,
+    @SerialName("page_title") val pageTitle: String? = null,
+    /** pending | approved | denied */
+    val status: String,
+    @SerialName("created_at") val createdAt: String? = null
+)
+
+// ── Message log ───────────────────────────────────────────────────────────────
+
+@Serializable
+data class MessageLogEntry(
+    val id: String,
+    @SerialName("device_id")       val deviceId: String,
+    @SerialName("thread_id")       val threadId: Long,
+    @SerialName("sender_address")  val senderAddress: String? = null,
+    @SerialName("sender_type")     val senderType: String    = "contact",
+    @SerialName("message_type")    val messageType: String   = "text",
+    @SerialName("has_media")       val hasMedia: Boolean     = false,
+    @SerialName("thumbnail_url")   val thumbnailUrl: String? = null,
+    @SerialName("tokens_consumed") val tokensConsumed: Int   = 0,
+    @SerialName("created_at")      val createdAt: String
+)
+
+@Serializable
+data class ConversationMeta(
+    val id: String,
+    @SerialName("device_id")     val deviceId: String,
+    @SerialName("thread_id")     val threadId: Long,
+    @SerialName("display_name")  val displayName: String = "",
+    @SerialName("is_pinned")     val isPinned: Boolean   = false,
+    @SerialName("is_muted")      val isMuted: Boolean    = false,
+    @SerialName("created_at")    val createdAt: String?  = null
 )

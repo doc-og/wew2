@@ -79,6 +79,9 @@ dependencies {
     // Charts
     implementation 'com.patrykandpatrick.vico:compose-m3:1.13.1'
 
+    // Image loading (thumbnails in message log)
+    implementation 'io.coil-kt:coil-compose:2.6.0'
+
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
