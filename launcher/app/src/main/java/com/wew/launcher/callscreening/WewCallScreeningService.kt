@@ -1,15 +1,21 @@
-package com.wew.launcher.telecom
+package com.wew.launcher.callscreening
 
-import android.telecom.CallScreeningService as AndroidCallScreeningService
+import android.telecom.CallScreeningService
 import android.util.Log
+import com.wew.launcher.telecom.ParentPushNotifier
+import com.wew.launcher.telecom.WewCallManager
+import com.wew.launcher.telecom.WewPhoneAllowlist
 
 /**
  * When WeW is the user's call screening app, unknown callers (not parent / approved contacts)
  * are rejected before the child sees the system dialer. The parent receives an FCM alert.
+ *
+ * Lives in [com.wew.launcher.callscreening] (not …telecom) so Kotlin resolves
+ * [CallScreeningService.CallDetails] correctly.
  */
-class WewCallScreeningService : AndroidCallScreeningService() {
+class WewCallScreeningService : CallScreeningService() {
 
-    override fun onScreenCall(callDetails: AndroidCallScreeningService.CallDetails) {
+    override fun onScreenCall(callDetails: CallScreeningService.CallDetails) {
         val prefs = applicationContext.getSharedPreferences("wew_prefs", MODE_PRIVATE)
         val deviceId = prefs.getString("device_id", null).orEmpty()
         val handle = callDetails.handle
@@ -19,7 +25,7 @@ class WewCallScreeningService : AndroidCallScreeningService() {
         if (allowed) {
             respondToCall(
                 callDetails,
-                AndroidCallScreeningService.CallResponse.Builder().build()
+                CallScreeningService.CallResponse.Builder().build()
             )
             return
         }
@@ -28,7 +34,7 @@ class WewCallScreeningService : AndroidCallScreeningService() {
         ParentPushNotifier.notifyUnknownIncomingCall(deviceId, raw)
         respondToCall(
             callDetails,
-            AndroidCallScreeningService.CallResponse.Builder()
+            CallScreeningService.CallResponse.Builder()
                 .setDisallowCall(true)
                 .setRejectCall(true)
                 .build()

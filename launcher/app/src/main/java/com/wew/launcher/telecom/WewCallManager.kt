@@ -298,7 +298,7 @@ object WewCallManager {
         }
     }
 
-    /** Brief UI after [WewCallScreeningService] blocks an unknown caller. */
+    /** Brief UI after [com.wew.launcher.callscreening.WewCallScreeningService] blocks an unknown caller. */
     fun showBlockedUnknownCall(incomingNumber: String?) {
         scope.launch {
             tickerJob?.cancel()
