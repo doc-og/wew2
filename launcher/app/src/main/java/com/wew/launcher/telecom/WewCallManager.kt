@@ -343,8 +343,14 @@ object WewCallManager {
             return
         }
         val conn = activeConnection ?: return
-        runCatching { TelecomBridge.disconnect(conn) }
+        runCatching { disconnectViaReflection(conn) }
             .onFailure { Log.e(TAG, "hangUp failed", it) }
+    }
+
+    /** Javac/Kotlin stubs omit [android.telecom.Connection.disconnect] in some setups; invoke reflectively. */
+    private fun disconnectViaReflection(conn: android.telecom.Connection) {
+        val m = conn.javaClass.getMethod("disconnect")
+        m.invoke(conn)
     }
 
     fun toggleSpeaker(context: Context) {
