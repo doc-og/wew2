@@ -96,12 +96,33 @@ fun ConversationListScreen(
         }
     }
 
+    // Launch parent app when passcode verified
+    LaunchedEffect(state.pendingLaunchParentApp) {
+        if (state.pendingLaunchParentApp) {
+            val intent = context.packageManager
+                .getLaunchIntentForPackage("com.wew.parent")
+                ?.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+            intent?.let { context.startActivity(it) }
+            viewModel.clearPendingLaunchParentApp()
+        }
+    }
+
     // SOS confirmation dialog
     if (state.showSosConfirm) {
         SosConfirmDialog(
             parentPhone = state.parentPhoneNumber,
             onConfirm = viewModel::confirmSos,
             onDismiss = viewModel::hideSosDialog
+        )
+    }
+
+    // Parent app passcode dialog
+    if (state.showParentPasscode) {
+        PasscodeDialog(
+            appName = "Parent App",
+            attemptsLeft = state.passcodeAttemptsLeft,
+            onPinSubmit = { pin -> viewModel.verifyPasscodeForParentApp(pin) },
+            onDismiss = viewModel::dismissParentPasscode
         )
     }
 
@@ -230,6 +251,7 @@ fun ConversationListScreen(
                 onContacts = { viewModel.hideNavMenu(); onOpenContacts() },
                 onCheckIn = { viewModel.hideNavMenu(); onOpenCheckIn() },
                 onMap = { viewModel.hideNavMenu(); onOpenMap() },
+                onParentAccess = { viewModel.hideNavMenu(); viewModel.showParentPasscodeDialog() },
                 onSos = { viewModel.hideNavMenu(); viewModel.showSosDialog() }
             )
         }
@@ -576,6 +598,7 @@ fun NavigationMenuSheet(
     onContacts: () -> Unit,
     onCheckIn: () -> Unit,
     onMap: () -> Unit = {},
+    onParentAccess: () -> Unit = {},
     onSos: () -> Unit
 ) {
     Column(
@@ -627,6 +650,7 @@ fun NavigationMenuSheet(
         NavItem("Contacts", onClick = onContacts)
         NavItem("Check In", onClick = onCheckIn)
         NavItem("Map", onClick = onMap)
+        NavItem("Parent App", onClick = onParentAccess)
 
         // Divider before emergency option
         Box(

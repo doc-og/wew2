@@ -56,7 +56,13 @@ data class ConversationListUiState(
     /** Show SOS confirmation dialog. */
     val showSosConfirm: Boolean = false,
     /** Set to the number to dial; UI observes and launches the intent, then clears. */
-    val pendingEmergencyCall: String? = null
+    val pendingEmergencyCall: String? = null,
+    /** Show the passcode dialog for parent app access. */
+    val showParentPasscode: Boolean = false,
+    /** Remaining attempts before the passcode dialog auto-dismisses. */
+    val passcodeAttemptsLeft: Int = 3,
+    /** Set to true when passcode verified — UI launches parent app then clears. */
+    val pendingLaunchParentApp: Boolean = false
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -301,6 +307,48 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     }
 
     fun clearPendingEmergencyCall() = _uiState.update { it.copy(pendingEmergencyCall = null) }
+
+    // ── Parent app access ─────────────────────────────────────────────────────
+
+    fun showParentPasscodeDialog() =
+        _uiState.update { it.copy(showParentPasscode = true, passcodeAttemptsLeft = 3) }
+
+    fun dismissParentPasscode() =
+        _uiState.update { it.copy(showParentPasscode = false) }
+
+    fun verifyPasscodeForParentApp(pin: String) {
+        val state = _uiState.value
+        if (state.deviceId.isEmpty()) return
+        viewModelScope.launch {
+            val record = repo.getDevicePasscode(state.deviceId)
+            if (record == null) {
+                // No passcode configured — allow direct access
+                _uiState.update { it.copy(showParentPasscode = false, pendingLaunchParentApp = true) }
+                return@launch
+            }
+            val hash = hashPin(state.deviceId, pin)
+            if (hash == record.passcodeHash) {
+                _uiState.update { it.copy(showParentPasscode = false, pendingLaunchParentApp = true) }
+            } else {
+                val remaining = state.passcodeAttemptsLeft - 1
+                if (remaining <= 0) {
+                    _uiState.update { it.copy(showParentPasscode = false, passcodeAttemptsLeft = 3) }
+                } else {
+                    _uiState.update { it.copy(passcodeAttemptsLeft = remaining) }
+                }
+            }
+        }
+    }
+
+    fun clearPendingLaunchParentApp() =
+        _uiState.update { it.copy(pendingLaunchParentApp = false) }
+
+    private fun hashPin(deviceId: String, pin: String): String {
+        val input = deviceId + pin
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val bytes = digest.digest(input.toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
 
     // ── Token request ─────────────────────────────────────────────────────────
 
