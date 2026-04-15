@@ -9,7 +9,7 @@ import android.util.Log
  */
 class WewCallScreeningService : CallScreeningService() {
 
-    override fun onScreenCall(callDetails: CallDetails) {
+    override fun onScreenCall(callDetails: android.telecom.CallScreeningService.CallDetails) {
         val prefs = applicationContext.getSharedPreferences("wew_prefs", MODE_PRIVATE)
         val deviceId = prefs.getString("device_id", null).orEmpty()
         val handle = callDetails.handle
@@ -17,7 +17,10 @@ class WewCallScreeningService : CallScreeningService() {
 
         val allowed = WewPhoneAllowlist.isAllowed(prefs, raw)
         if (allowed) {
-            respondToCall(callDetails, CallResponse.Builder().build())
+            respondToCall(
+                callDetails,
+                android.telecom.CallScreeningService.CallResponse.Builder().build()
+            )
             return
         }
 
@@ -25,7 +28,7 @@ class WewCallScreeningService : CallScreeningService() {
         ParentPushNotifier.notifyUnknownIncomingCall(deviceId, raw)
         respondToCall(
             callDetails,
-            CallResponse.Builder()
+            android.telecom.CallScreeningService.CallResponse.Builder()
                 .setDisallowCall(true)
                 .setRejectCall(true)
                 .build()

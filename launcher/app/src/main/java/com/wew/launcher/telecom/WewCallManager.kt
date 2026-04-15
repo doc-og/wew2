@@ -6,6 +6,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
+import android.telecom.Connection as TelecomConnection
 import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
@@ -81,7 +82,7 @@ object WewCallManager {
 
     private var pendingSession: PendingSession? = null
 
-    private var activeConnection: android.telecom.Connection? = null
+    private var activeConnection: TelecomConnection? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var tickerJob: Job? = null
@@ -183,7 +184,7 @@ object WewCallManager {
         )
     }
 
-    internal fun onOutgoingConnectionCreated(connection: android.telecom.Connection, number: String) {
+    internal fun onOutgoingConnectionCreated(connection: TelecomConnection, number: String) {
         activeConnection = connection
         val label = pendingDisplayLabel?.takeIf { it.isNotBlank() } ?: number
         pendingDisplayLabel = null
@@ -342,7 +343,8 @@ object WewCallManager {
             _uiState.value = null
             return
         }
-        runCatching { activeConnection?.disconnect() }
+        val conn = activeConnection ?: return
+        runCatching { conn.disconnect() }
             .onFailure { Log.e(TAG, "hangUp failed", it) }
     }
 
