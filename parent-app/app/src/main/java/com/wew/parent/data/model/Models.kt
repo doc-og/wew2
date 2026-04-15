@@ -15,6 +15,11 @@ data class Device(
     @SerialName("credits_reset_time") val creditsResetTime: String = "07:00:00",
     @SerialName("current_tokens") val currentTokens: Int = 10000,
     @SerialName("daily_token_budget") val dailyTokenBudget: Int = 10000,
+    @SerialName("tokens_reset_time") val tokensResetTime: String = "00:00:00",
+    @SerialName("parent_phone") val parentPhone: String? = null,
+    @SerialName("parent_display_name") val parentDisplayName: String? = null,
+    @SerialName("parent_sms_thread_id") val parentSmsThreadId: String? = null,
+    @SerialName("timezone") val timezone: String = "America/Los_Angeles",
     @SerialName("last_seen_at") val lastSeenAt: String? = null
 )
 
@@ -153,13 +158,14 @@ data class UrlAccessRequest(
 data class MessageLogEntry(
     val id: String,
     @SerialName("device_id")       val deviceId: String,
-    @SerialName("thread_id")       val threadId: Long,
+    @SerialName("thread_id")       val threadId: String,
     @SerialName("sender_address")  val senderAddress: String? = null,
     @SerialName("sender_type")     val senderType: String    = "contact",
     @SerialName("message_type")    val messageType: String   = "text",
     @SerialName("has_media")       val hasMedia: Boolean     = false,
     @SerialName("thumbnail_url")   val thumbnailUrl: String? = null,
     @SerialName("tokens_consumed") val tokensConsumed: Int   = 0,
+    val body: String? = null,
     @SerialName("created_at")      val createdAt: String
 )
 

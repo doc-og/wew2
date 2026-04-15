@@ -28,7 +28,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -68,8 +67,19 @@ import com.wew.launcher.ui.theme.SurfaceVariant
 import com.wew.launcher.ui.theme.WarningAmber
 import com.wew.launcher.ui.viewmodel.ContactsViewModel
 
-private val ApprovedGreen = Color(0xFF4CAF50)
 private val PendingAmber = Color(0xFFFFC107)
+
+/** Formats a raw phone string to (NXX) NXX-XXXX when it has 10 digits. */
+private fun formatPhoneNumber(raw: String): String {
+    val digits = raw.filter { it.isDigit() }
+    return when {
+        digits.length == 10 ->
+            "(${digits.substring(0, 3)}) ${digits.substring(3, 6)}-${digits.substring(6)}"
+        digits.length == 11 && digits.startsWith("1") ->
+            "(${digits.substring(1, 4)}) ${digits.substring(4, 7)}-${digits.substring(7)}"
+        else -> raw
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,21 +117,6 @@ fun ContactsScreen(
                     actionColor = ElectricViolet
                 )
             }
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { viewModel.onAddContact() },
-                containerColor = ElectricViolet,
-                contentColor = Color.White,
-                shape = CircleShape,
-                modifier = Modifier.navigationBarsPadding()
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Add contact",
-                    modifier = Modifier.size(28.dp)
-                )
-            }
         }
     ) { innerPadding ->
         Box(
@@ -135,7 +130,7 @@ fun ContactsScreen(
                     .fillMaxSize()
                     .statusBarsPadding()
             ) {
-                // Header row with back button and title
+                // Header row with close button, title, and add button
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -155,8 +150,17 @@ fun ContactsScreen(
                         text = "contacts",
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Bold,
-                        color = OnNight
+                        color = OnNight,
+                        modifier = Modifier.weight(1f)
                     )
+                    IconButton(onClick = { viewModel.onAddContact() }) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add contact",
+                            tint = ElectricViolet,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -193,6 +197,9 @@ fun ContactsScreen(
                         }
                     }
                 } else {
+                    val visibleContacts = uiState.contacts.filter { contact ->
+                        uiState.authRequests[contact.id ?: ""] != "denied"
+                    }
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -201,7 +208,7 @@ fun ContactsScreen(
                             vertical = 8.dp
                         )
                     ) {
-                        items(uiState.contacts, key = { it.id ?: it.name }) { contact ->
+                        items(visibleContacts, key = { it.id ?: it.name }) { contact ->
                             ContactCard(
                                 contact = contact,
                                 authStatus = uiState.authRequests[contact.id ?: ""],
@@ -281,22 +288,16 @@ private fun ContactCard(
                 contact.phone?.let { phone ->
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = phone,
+                        text = formatPhoneNumber(phone),
                         fontSize = 13.sp,
                         color = OnNight.copy(alpha = 0.7f)
                     )
                 }
             }
 
-            // Status badge
-            when (authStatus) {
-                "approved" -> StatusPill(text = "approved", backgroundColor = ApprovedGreen)
-                "pending" -> StatusPill(text = "pending", backgroundColor = PendingAmber)
-                else -> Text(
-                    text = "needs approval",
-                    fontSize = 11.sp,
-                    color = OnNight.copy(alpha = 0.45f)
-                )
+            // Status badge — only show "pending" pill; approved contacts show nothing
+            if (authStatus == "pending") {
+                StatusPill(text = "pending", backgroundColor = PendingAmber)
             }
         }
     }
@@ -388,25 +389,17 @@ private fun ContactDetailDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Auth status display
-                when (authStatus) {
-                    "approved" -> {
-                        StatusPill(text = "approved", backgroundColor = ApprovedGreen)
-                    }
-                    "pending" -> {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            StatusPill(text = "pending", backgroundColor = PendingAmber)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "waiting for parent approval",
-                                fontSize = 13.sp,
-                                color = PendingAmber,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                    else -> {
-                        // No request yet
+                // Auth status — only show "pending" pill; no pill when approved
+                if (authStatus == "pending") {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        StatusPill(text = "pending", backgroundColor = PendingAmber)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "waiting for parent approval",
+                            fontSize = 13.sp,
+                            color = PendingAmber,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
 
@@ -414,7 +407,7 @@ private fun ContactDetailDialog(
 
                 // Contact fields
                 contact.phone?.let { phone ->
-                    ContactDetailField(label = "phone", value = phone)
+                    ContactDetailField(label = "phone", value = formatPhoneNumber(phone))
                     Spacer(modifier = Modifier.height(12.dp))
                 }
                 contact.email?.let { email ->

@@ -18,6 +18,7 @@ import io.github.jan.supabase.gotrue.auth
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -103,10 +104,40 @@ class ParentRepository {
             .firstOrNull()
     }
 
+    suspend fun getDevice(deviceId: String): Device? {
+        val uid = currentUserId() ?: return null
+        return supabase.postgrest["devices"]
+            .select(Columns.ALL) {
+                filter {
+                    eq("id", deviceId)
+                    eq("parent_user_id", uid)
+                }
+            }
+            .decodeList<Device>()
+            .firstOrNull()
+    }
+
     suspend fun remoteLockDevice(deviceId: String, locked: Boolean) {
         supabase.postgrest["devices"].update(
             buildJsonObject { put("is_locked", locked) }
         ) { filter { eq("id", deviceId) } }
+    }
+
+    /** Parent phone + display name for child SOS and WeW Parent thread labeling. */
+    suspend fun updateDeviceParentContact(
+        deviceId: String,
+        parentPhone: String?,
+        parentDisplayName: String?,
+        timezone: String? = null
+    ) {
+        val payload = buildJsonObject {
+            if (parentPhone.isNullOrBlank()) put("parent_phone", JsonNull)
+            else put("parent_phone", parentPhone.trim())
+            if (parentDisplayName.isNullOrBlank()) put("parent_display_name", JsonNull)
+            else put("parent_display_name", parentDisplayName.trim())
+            if (!timezone.isNullOrBlank()) put("timezone", timezone.trim())
+        }
+        supabase.postgrest["devices"].update(payload) { filter { eq("id", deviceId) } }
     }
 
     // Activity log
@@ -450,12 +481,13 @@ class ParentRepository {
     }
 
     suspend fun getMessagesForThread(deviceId: String, threadId: Long, limit: Int = 50): List<MessageLogEntry> {
+        val tid = threadId.toString()
         return runCatching {
             supabase.postgrest["messages"]
                 .select(Columns.ALL) {
                     filter {
                         eq("device_id", deviceId)
-                        eq("thread_id", threadId)
+                        eq("thread_id", tid)
                     }
                     order("created_at", Order.DESCENDING)
                     limit(limit.toLong())

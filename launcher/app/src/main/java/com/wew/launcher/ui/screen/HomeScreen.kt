@@ -1,12 +1,7 @@
 package com.wew.launcher.ui.screen
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,12 +52,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wew.launcher.data.model.AppInfo
+import com.wew.launcher.ui.theme.ElectricViolet
 import com.wew.launcher.ui.theme.EmergencyRed
 import com.wew.launcher.ui.theme.Night
 import com.wew.launcher.ui.theme.OnNight
 import com.wew.launcher.ui.theme.SurfaceVariant
 import com.wew.launcher.ui.theme.WarningAmber
-import com.wew.launcher.ui.theme.ElectricViolet
 import com.wew.launcher.ui.viewmodel.HomeViewModel
 import kotlinx.coroutines.delay
 import java.time.LocalTime
@@ -168,19 +163,9 @@ fun HomeScreen(
 @Composable
 private fun TopBar(tokens: Int, dailyBudget: Int) {
     val lowCredits = tokens < (dailyBudget * 0.2f)
-    val creditColor = if (lowCredits) WarningAmber else OnNight
-
-    // Pulse animation when low
-    val infiniteTransition = rememberInfiniteTransition(label = "creditPulse")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (lowCredits) 0.4f else 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "creditAlpha"
-    )
+    val chipBorder = if (lowCredits) WarningAmber else Color(0xFF3D2FA8)
+    val chipText = Color(0xFF1A1A2E)
+    val chipBg = Color(0xFFF5F3FF)
 
     var currentTime by remember { mutableStateOf(LocalTime.now()) }
     LaunchedEffect(Unit) {
@@ -209,39 +194,43 @@ private fun TopBar(tokens: Int, dailyBudget: Int) {
             }
         )
 
-        // Credit counter
-        Column(
-            horizontalAlignment = Alignment.End,
+        // Token counter — solid chip for contrast on dark home background
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = chipBg,
             modifier = Modifier
-                .alpha(if (lowCredits) alpha else 1f)
+                .border(1.5.dp, chipBorder, RoundedCornerShape(16.dp))
                 .semantics {
-                    contentDescription = "$tokens tokens remaining"
+                    contentDescription =
+                        "tokens remaining: $tokens of $dailyBudget daily budget" +
+                            if (lowCredits) ", running low" else ""
                 }
         ) {
-            Text(
-                text = tokens.toString(),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Medium,
-                color = creditColor
-            )
-            Text(
-                text = "tokens",
-                fontSize = 11.sp,
-                color = creditColor.copy(alpha = 0.7f)
-            )
-            if (lowCredits) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (lowCredits) {
                     Icon(
                         Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = WarningAmber,
-                        modifier = Modifier.size(12.dp)
+                        contentDescription = "low token warning",
+                        tint = Color(0xFFB45309),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.size(8.dp))
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = tokens.toString(),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = chipText
                     )
                     Text(
-                        text = " running low",
-                        fontSize = 10.sp,
-                        color = WarningAmber
+                        text = "tokens",
+                        fontSize = 12.sp,
+                        color = chipText.copy(alpha = 0.75f)
                     )
                 }
             }

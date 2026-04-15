@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -39,18 +40,23 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,12 +79,16 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.wew.launcher.data.model.WewContact
 import com.wew.launcher.sms.SmsDirection
 import com.wew.launcher.sms.SmsMessage
+import com.wew.launcher.token.TokenEngine
 import com.wew.launcher.ui.theme.BrandViolet
 import com.wew.launcher.ui.theme.Night
 import com.wew.launcher.ui.theme.OnNight
 import com.wew.launcher.ui.theme.WarningAmber
+import com.wew.launcher.data.model.ActionType
+import com.wew.launcher.ui.viewmodel.ChatBubbleItem
 import com.wew.launcher.ui.viewmodel.ChatViewModel
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
 import java.text.SimpleDateFormat
@@ -88,22 +98,28 @@ import java.util.Locale
 
 private val URL_REGEX = Regex("""https?://[^\s<>"]+""")
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     threadId: Long,
     recipientAddress: String,
     displayName: String,
+    mergeSystemSummaries: Boolean,
+    initialRecipients: List<WewContact> = emptyList(),
+    approvedContacts: List<WewContact> = emptyList(),
     onBack: () -> Unit,
     onOpenUrl: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val vm: ChatViewModel = viewModel(
-        key = "chat_$threadId",
+        key = "chat_${threadId}_${recipientAddress}_${initialRecipients.size}",
         factory = ChatViewModel.factory(
             app = context.applicationContext as Application,
             threadId = threadId,
             recipientAddress = recipientAddress,
-            recipientName = displayName
+            recipientName = displayName,
+            mergeSystemSummaries = mergeSystemSummaries,
+            initialRecipients = initialRecipients
         )
     )
     val state by vm.uiState.collectAsState()
@@ -126,11 +142,13 @@ fun ChatScreen(
     }
 
     // Scroll to bottom whenever the message count changes
-    LaunchedEffect(state.messages.size) {
-        if (state.messages.isNotEmpty()) {
-            listState.scrollToItem(state.messages.lastIndex)
+    LaunchedEffect(state.chatItems.size) {
+        if (state.chatItems.isNotEmpty()) {
+            listState.scrollToItem(state.chatItems.lastIndex)
         }
     }
+
+    var showRecipientPicker by remember { mutableStateOf(false) }
 
     // Launch phone dialer when a call is confirmed
     LaunchedEffect(state.pendingCall) {
@@ -148,7 +166,7 @@ fun ChatScreen(
     if (state.showCallConfirm) {
         CallConfirmDialog(
             recipientName = state.recipientName.ifBlank { displayName },
-            tokenCost = 100,
+            tokenCost = TokenEngine.calculateCost(ActionType.CALL_MADE, durationUnits = 0),
             tokensExhausted = state.tokensExhausted,
             onConfirm = vm::confirmCall,
             onDismiss = vm::dismissCallConfirm
@@ -165,13 +183,20 @@ fun ChatScreen(
             .fillMaxSize()
             .background(Night)
             .statusBarsPadding()
-            .navigationBarsPadding()
     ) {
         ChatTopBar(
             displayName = state.recipientName.ifBlank { displayName },
             onBack = onBack,
-            onCall = vm::onCallClick
+            onCall = vm::onCallClick,
+            callEnabled = state.recipientAddress.isNotBlank()
         )
+
+        if (approvedContacts.isNotEmpty()) {
+            RecipientStrip(
+                selected = state.selectedRecipients,
+                onAddClick = { showRecipientPicker = true }
+            )
+        }
 
         HorizontalDivider(color = OnNight.copy(alpha = 0.08f), thickness = 1.dp)
 
@@ -184,7 +209,7 @@ fun ChatScreen(
             ) {
                 CircularProgressIndicator(color = BrandViolet)
             }
-        } else if (state.messages.isEmpty()) {
+        } else if (state.chatItems.isEmpty()) {
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -192,7 +217,11 @@ fun ChatScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "no messages yet — say hi!",
+                    text = if (state.selectedRecipients.isEmpty() && approvedContacts.isNotEmpty()) {
+                        "add people above, then say hi!"
+                    } else {
+                        "no messages yet — say hi!"
+                    },
                     fontSize = 15.sp,
                     color = OnNight.copy(alpha = 0.4f)
                 )
@@ -204,12 +233,15 @@ fun ChatScreen(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(state.messages, key = { it.id }) { msg ->
-                    MessageBubble(
-                        message = msg,
-                        onImageClick = vm::showFullScreenImage,
-                        onOpenUrl = onOpenUrl
-                    )
+                items(state.chatItems, key = { it.stableKey }) { item ->
+                    when (item) {
+                        is ChatBubbleItem.Local -> MessageBubble(
+                            message = item.message,
+                            onImageClick = vm::showFullScreenImage,
+                            onOpenUrl = onOpenUrl
+                        )
+                        is ChatBubbleItem.System -> SystemMessageBubble(body = item.body)
+                    }
                 }
             }
         }
@@ -223,15 +255,166 @@ fun ChatScreen(
             tokensExhausted = state.tokensExhausted,
             attachedImageUri = state.attachedImageUri,
             onClearAttachment = vm::clearAttachment,
-            isMms = state.attachedImageUri != null
+            isMms = state.attachedImageUri != null,
+            sendEnabled = state.selectedRecipients.isNotEmpty() || state.recipientAddress.isNotBlank()
         )
+    }
+
+    if (showRecipientPicker && approvedContacts.isNotEmpty()) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showRecipientPicker = false },
+            sheetState = sheetState,
+            containerColor = Color(0xFF13131F)
+        ) {
+            RecipientPickerSheet(
+                approvedContacts = approvedContacts,
+                initiallySelected = state.selectedRecipients,
+                onDone = { picked ->
+                    vm.setRecipients(picked)
+                    showRecipientPicker = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecipientStrip(
+    selected: List<WewContact>,
+    onAddClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "to:",
+            fontSize = 13.sp,
+            color = OnNight.copy(alpha = 0.5f),
+            modifier = Modifier.padding(end = 8.dp)
+        )
+        Row(modifier = Modifier.weight(1f)) {
+            if (selected.isEmpty()) {
+                Text(
+                    "tap to add people",
+                    color = BrandViolet,
+                    fontSize = 14.sp,
+                    modifier = Modifier.clickable(onClick = onAddClick)
+                )
+            } else {
+                Text(
+                    selected.joinToString { it.name } + " · ",
+                    fontSize = 14.sp,
+                    color = OnNight,
+                    maxLines = 1
+                )
+                Text(
+                    "edit",
+                    color = BrandViolet,
+                    fontSize = 14.sp,
+                    modifier = Modifier.clickable(onClick = onAddClick)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecipientPickerSheet(
+    approvedContacts: List<WewContact>,
+    initiallySelected: List<WewContact>,
+    onDone: (List<WewContact>) -> Unit
+) {
+    fun contactKey(c: WewContact): String = c.id ?: c.phone.orEmpty()
+    var pickedKeys by remember {
+        mutableStateOf(initiallySelected.map(::contactKey).filter { it.isNotEmpty() }.toSet())
+    }
+    Column(Modifier.padding(20.dp)) {
+        Text("choose people", fontSize = 18.sp, fontWeight = FontWeight.Medium, color = OnNight)
+        Spacer(Modifier.height(12.dp))
+        LazyColumn {
+            items(approvedContacts, key = { contactKey(it) }) { c ->
+                val key = contactKey(c)
+                if (key.isEmpty()) return@items
+                val on = key in pickedKeys
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            pickedKeys =
+                                if (key in pickedKeys) pickedKeys - key else pickedKeys + key
+                        }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (on) "●" else "○",
+                        color = if (on) BrandViolet else OnNight.copy(alpha = 0.4f),
+                        modifier = Modifier.width(28.dp),
+                        fontSize = 14.sp
+                    )
+                    Column {
+                        Text(c.name, color = OnNight, fontSize = 16.sp)
+                        c.phone?.let { Text(it, fontSize = 13.sp, color = OnNight.copy(alpha = 0.5f)) }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        TextButton(
+            onClick = {
+                val list = approvedContacts.filter { contactKey(it) in pickedKeys }
+                onDone(list)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("done", color = BrandViolet)
+        }
+    }
+}
+
+@Composable
+private fun SystemMessageBubble(body: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "wew",
+            fontSize = 11.sp,
+            color = OnNight.copy(alpha = 0.45f)
+        )
+        Spacer(Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF2A2540))
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = body,
+                fontSize = 14.sp,
+                color = OnNight.copy(alpha = 0.92f),
+                lineHeight = 20.sp
+            )
+        }
     }
 }
 
 // ── Top bar ───────────────────────────────────────────────────────────────────
 
 @Composable
-private fun ChatTopBar(displayName: String, onBack: () -> Unit, onCall: () -> Unit = {}) {
+private fun ChatTopBar(
+    displayName: String,
+    onBack: () -> Unit,
+    onCall: () -> Unit = {},
+    callEnabled: Boolean = true
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -273,12 +456,14 @@ private fun ChatTopBar(displayName: String, onBack: () -> Unit, onCall: () -> Un
             modifier = Modifier.weight(1f)
         )
 
-        IconButton(onClick = onCall) {
-            Icon(
-                Icons.Default.Call,
-                contentDescription = "Call",
-                tint = BrandViolet
-            )
+        if (callEnabled) {
+            IconButton(onClick = onCall) {
+                Icon(
+                    Icons.Default.Call,
+                    contentDescription = "Call",
+                    tint = BrandViolet
+                )
+            }
         }
     }
 }
@@ -456,13 +641,16 @@ private fun InputBar(
     tokensExhausted: Boolean,
     attachedImageUri: String?,
     onClearAttachment: () -> Unit,
-    isMms: Boolean
+    isMms: Boolean,
+    sendEnabled: Boolean = true
 ) {
-    val canSend = (text.isNotBlank() || attachedImageUri != null) && !isSending && !tokensExhausted
-    val tokenCost = if (isMms) "50" else "10"
+    val canSend = (text.isNotBlank() || attachedImageUri != null) && !isSending && !tokensExhausted && sendEnabled
+    val tokenCost = TokenEngine.calculateCost(
+        if (isMms) ActionType.MMS_SENT else ActionType.SMS_SENT
+    ).toString()
     val context = LocalContext.current
 
-    Column {
+    Column(modifier = Modifier.imePadding().navigationBarsPadding()) {
         if (tokensExhausted) {
             Text(
                 text = "tokens exhausted — can't send",

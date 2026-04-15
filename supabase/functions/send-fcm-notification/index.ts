@@ -91,6 +91,11 @@ function buildNotification(type: string, data: Record<string, string>): { title:
         title: 'daily summary',
         body: `your child used ${data.credits_used ?? '?'} credits today`,
       }
+    case 'daily_usage_summary':
+      return {
+        title: 'daily usage note',
+        body: data.preview ?? 'your child has a new daily summary in the parent chat',
+      }
     case 'location_update':
       return {
         title: 'location updated',

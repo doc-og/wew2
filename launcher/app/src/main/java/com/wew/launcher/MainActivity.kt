@@ -41,7 +41,8 @@ private sealed class WewScreen {
     data class Chat(
         val threadId: Long,
         val address: String,
-        val displayName: String
+        val displayName: String,
+        val isNewCompose: Boolean = false
     ) : WewScreen()
     data class Web(val url: String) : WewScreen()
     object Map : WewScreen()
@@ -91,7 +92,10 @@ class MainActivity : ComponentActivity() {
                         ConversationListScreen(
                             viewModel = convListViewModel,
                             onOpenThread = { threadId, address, displayName ->
-                                screen = WewScreen.Chat(threadId, address, displayName)
+                                screen = WewScreen.Chat(threadId, address, displayName, isNewCompose = false)
+                            },
+                            onOpenNewCompose = {
+                                screen = WewScreen.Chat(-1L, "", "new message", isNewCompose = true)
                             },
                             onOpenContacts = { showContacts = true },
                             onOpenCheckIn = {
@@ -132,10 +136,14 @@ class MainActivity : ComponentActivity() {
                     }
 
                     is WewScreen.Chat -> {
+                        val approved = convListViewModel.uiState.value.approvedContacts
                         ChatScreen(
                             threadId = s.threadId,
                             recipientAddress = s.address,
                             displayName = s.displayName,
+                            mergeSystemSummaries = !s.isNewCompose && s.displayName == "WeW Parent",
+                            initialRecipients = emptyList(),
+                            approvedContacts = if (s.isNewCompose) approved else emptyList(),
                             onBack = { screen = WewScreen.ConversationList },
                             onOpenUrl = { url -> screen = WewScreen.Web(url) }
                         )

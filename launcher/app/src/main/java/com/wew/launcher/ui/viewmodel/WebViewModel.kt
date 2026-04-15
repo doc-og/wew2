@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.UrlFilter
 import com.wew.launcher.data.repository.DeviceRepository
+import com.wew.launcher.token.TokenEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -172,9 +173,10 @@ class WebViewModel(
         val deviceId = prefs.getString("device_id", null) ?: return
         viewModelScope.launch {
             runCatching {
+                val cost = TokenEngine.calculateCost(ActionType.WEB_SESSION, durationUnits = 0)
                 val result = repo.consumeTokens(
                     deviceId = deviceId,
-                    amount = 15,
+                    amount = cost,
                     actionType = ActionType.WEB_SESSION.value,
                     appName = "Browser"
                 )

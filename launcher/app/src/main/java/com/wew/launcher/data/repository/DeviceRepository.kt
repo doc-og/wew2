@@ -13,6 +13,7 @@ import com.wew.launcher.data.model.Device
 import com.wew.launcher.data.model.DevicePasscodeRecord
 import com.wew.launcher.data.model.LocationLog
 import com.wew.launcher.data.model.MessageLog
+import com.wew.launcher.data.model.SupabaseSystemMessage
 import com.wew.launcher.data.model.Schedule
 import com.wew.launcher.data.model.TempAppAccess
 import com.wew.launcher.data.model.TokenActionCost
@@ -23,6 +24,7 @@ import com.wew.launcher.data.model.UrlFilter
 import com.wew.launcher.data.model.WewContact
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
+import io.github.jan.supabase.postgrest.query.Order
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.realtime
 import kotlinx.coroutines.flow.Flow
@@ -52,6 +54,34 @@ class DeviceRepository(private val context: Context) {
         supabase.postgrest["devices"].update(
             buildJsonObject { put("last_seen_at", "now()") }
         ) { filter { eq("id", deviceId) } }
+    }
+
+    /** Sync Android SMS thread_id for the WeW Parent conversation (enables server daily summaries). */
+    suspend fun updateParentSmsThreadId(deviceId: String, threadId: Long) {
+        runCatching {
+            supabase.postgrest["devices"].update(
+                buildJsonObject { put("parent_sms_thread_id", threadId.toString()) }
+            ) { filter { eq("id", deviceId) } }
+        }.onFailure { Log.e("WewSync", "updateParentSmsThreadId: ${it.message}") }
+    }
+
+    /** System rows (e.g. daily_summary) for merging into the on-device parent SMS thread. */
+    suspend fun getSystemMessagesForThread(deviceId: String, threadId: Long): List<SupabaseSystemMessage> {
+        return runCatching {
+            supabase.postgrest["messages"]
+                .select(Columns.ALL) {
+                    filter {
+                        eq("device_id", deviceId)
+                        eq("thread_id", threadId.toString())
+                        eq("sender_type", "system")
+                    }
+                    order("created_at", Order.ASCENDING)
+                }
+                .decodeList<SupabaseSystemMessage>()
+        }.getOrElse {
+            Log.w("WewSync", "getSystemMessagesForThread: ${it.message}")
+            emptyList()
+        }
     }
 
     fun observeDevice(deviceId: String): Flow<Device> = flow {
@@ -89,6 +119,12 @@ class DeviceRepository(private val context: Context) {
                 put("action_type", actionType)
                 put("tokens_consumed", amount)
                 put("balance_after", newBalance)
+                if (contextMetadata.isNotEmpty()) {
+                    put(
+                        "context_metadata",
+                        buildJsonObject { contextMetadata.forEach { (k, v) -> put(k, v) } }
+                    )
+                }
             }
         )
 
@@ -185,6 +221,21 @@ class DeviceRepository(private val context: Context) {
                 }
             }
             .decodeList()
+    }
+
+    suspend fun getAppMediaActionType(deviceId: String, packageName: String): String? {
+        return runCatching {
+            supabase.postgrest["apps"]
+                .select(Columns.ALL) {
+                    filter {
+                        eq("device_id", deviceId)
+                        eq("package_name", packageName)
+                    }
+                }
+                .decodeList<AppRecord>()
+                .firstOrNull()
+                ?.mediaActionType
+        }.getOrNull()
     }
 
     suspend fun syncAppList(deviceId: String, context: Context) {

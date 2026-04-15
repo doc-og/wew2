@@ -21,6 +21,12 @@ data class Device(
     @SerialName("current_tokens")    val currentTokens: Int      = 10000,
     @SerialName("daily_token_budget") val dailyTokenBudget: Int  = 10000,
     @SerialName("tokens_reset_time") val tokensResetTime: String = "00:00:00",
+    /** Parent phone for SOS / WeW Parent thread (E.164 recommended). Set from parent app. */
+    @SerialName("parent_phone") val parentPhone: String? = null,
+    @SerialName("parent_display_name") val parentDisplayName: String? = null,
+    /** Android SMS thread_id for parent conversation — synced from launcher for daily summaries. */
+    @SerialName("parent_sms_thread_id") val parentSmsThreadId: String? = null,
+    @SerialName("timezone") val timezone: String = "America/Los_Angeles",
     // Legacy credit fields — kept so the DB column is still readable; no longer driven by app
     @SerialName("current_credits")      val currentCredits: Int      = 0,
     @SerialName("daily_credit_budget")  val dailyCreditBudget: Int   = 0,
@@ -49,7 +55,9 @@ data class AppRecord(
     @SerialName("app_name")     val appName: String,
     @SerialName("is_whitelisted") val isWhitelisted: Boolean = false,
     @SerialName("is_system_app")  val isSystemApp: Boolean   = false,
-    @SerialName("credit_cost")    val creditCost: Int        = 1   // legacy column; token cost comes from TokenEngine
+    @SerialName("credit_cost")    val creditCost: Int        = 1,   // legacy column; token cost comes from TokenEngine
+    /** When set, foreground time in this app bills as this media action (see TOKEN_SYSTEM.md). */
+    @SerialName("media_action_type") val mediaActionType: String? = null
 )
 
 // AppSyncRecord: ONLY for batch upsert from child device (no id field — PostgREST requirement).
@@ -75,8 +83,12 @@ enum class ActionType(val value: String) {
     CALL_MADE("call_made"),
     CALL_RECEIVED("call_received"),
     VIDEO_CALL_MADE("video_call_made"),
-    // Media
+    // Media / attention-heavy foreground sessions (per TOKEN_SYSTEM.md)
     PHOTO_TAKEN("photo_taken"),
+    VIDEO_WATCHED("video_watched"),
+    GAME_SESSION("game_session"),
+    SOCIAL_SCROLL("social_scroll"),
+    AUDIO_STREAMED("audio_streamed"),
     // Web
     WEB_SESSION("web_session"),
     URL_BLOCKED("url_blocked"),
@@ -102,6 +114,18 @@ enum class ActionType(val value: String) {
         fun fromValue(value: String) = entries.firstOrNull { it.value == value }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Supabase messages (system summaries merged into parent chat on device)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Serializable
+data class SupabaseSystemMessage(
+    val id: String,
+    val body: String? = null,
+    @SerialName("message_type") val messageType: String = "daily_summary",
+    @SerialName("created_at") val createdAt: String
+)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Activity log

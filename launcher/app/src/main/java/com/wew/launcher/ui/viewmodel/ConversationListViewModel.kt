@@ -48,10 +48,10 @@ data class ConversationListUiState(
     val tokensExhausted: Boolean = false,
     val deviceId: String = "",
     val parentPhoneNumber: String? = null,
+    val parentName: String? = null,
     /** Thread currently selected for context-menu actions (long-press). */
     val contextMenuThread: ConversationItem? = null,
     val showNavMenu: Boolean = false,
-    val showNewConversationSheet: Boolean = false,
     val approvedContacts: List<WewContact> = emptyList(),
     /** Show SOS confirmation dialog. */
     val showSosConfirm: Boolean = false,
@@ -97,8 +97,15 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 val conversationMeta = repo.getConversationMeta(deviceId)
                 val metaByThread = conversationMeta.associateBy { it.threadId }
 
-                // Parent phone number stored in prefs during setup (future: from Supabase)
-                val parentPhone = prefs.getString("parent_phone", null)
+                // Parent phone: Supabase device row (parent app) is source of truth; prefs cache offline.
+                val parentPhone = device.parentPhone?.takeIf { it.isNotBlank() }
+                    ?: prefs.getString("parent_phone", null)
+                val parentName = device.parentDisplayName?.takeIf { it.isNotBlank() }
+                    ?: prefs.getString("parent_name", null)
+                prefs.edit().apply {
+                    device.parentPhone?.takeIf { it.isNotBlank() }?.let { putString("parent_phone", it) }
+                    device.parentDisplayName?.takeIf { it.isNotBlank() }?.let { putString("parent_name", it) }
+                }.apply()
 
                 val threads = smsRepo.getThreads()
                 val items = buildConversationItems(
@@ -113,6 +120,14 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 val calendarPkg = CALENDAR_PACKAGES.firstOrNull { it in whitelistedPkgs }
                 val weatherPkg = WEATHER_PACKAGES.firstOrNull { it in whitelistedPkgs }
 
+                val parentItem = pinned.find { it.isParent }
+                if (parentItem != null) {
+                    val localTid = parentItem.thread.threadId.toString()
+                    if (device.parentSmsThreadId != localTid) {
+                        repo.updateParentSmsThreadId(deviceId, parentItem.thread.threadId)
+                    }
+                }
+
                 _uiState.update {
                     it.copy(
                         pinned = pinned,
@@ -124,6 +139,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                         tokensExhausted = device.currentTokens <= 0,
                         deviceId = deviceId,
                         parentPhoneNumber = parentPhone,
+                        parentName = parentName,
                         approvedContacts = approvedContacts,
                         approvedCalendarPackage = calendarPkg,
                         approvedWeatherPackage = weatherPkg
@@ -188,7 +204,9 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                     val contacts = repo.getContacts(deviceId).filter { it.isAuthorized }
                     val metaByThread = repo.getConversationMeta(deviceId)
                         .associateBy { it.threadId }
-                    val parentPhone = prefs.getString("parent_phone", null)
+                    val device = runCatching { repo.getDevice(deviceId) }.getOrNull()
+                    val parentPhone = device?.parentPhone?.takeIf { it.isNotBlank() }
+                        ?: prefs.getString("parent_phone", null)
                     val threads = smsRepo.getThreads()
                     val items = buildConversationItems(threads, contacts, parentPhone, metaByThread)
                     val (pinned, rest) = items.partition { it.isPinned }
@@ -304,9 +322,6 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
     fun showNavMenu() = _uiState.update { it.copy(showNavMenu = true) }
     fun hideNavMenu() = _uiState.update { it.copy(showNavMenu = false) }
-
-    fun showNewConversation() = _uiState.update { it.copy(showNewConversationSheet = true) }
-    fun hideNewConversation() = _uiState.update { it.copy(showNewConversationSheet = false) }
 
     // ── SOS ───────────────────────────────────────────────────────────────────
 

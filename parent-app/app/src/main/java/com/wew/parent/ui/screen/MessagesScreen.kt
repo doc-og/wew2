@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -253,6 +254,38 @@ fun MessageThreadScreen(
 
 @Composable
 private fun MessageLogRow(msg: MessageLogEntry) {
+    if (msg.senderType == "system") {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("wew", fontSize = 11.sp, color = Color(0xFF9999AA))
+            Spacer(Modifier.height(4.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFFE8E6F5))
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    msg.body ?: msg.messageType.replace('_', ' '),
+                    fontSize = 14.sp,
+                    color = Color(0xFF1A1A2E),
+                    lineHeight = 20.sp
+                )
+            }
+            Text(
+                formatLogTime(msg.createdAt),
+                fontSize = 11.sp,
+                color = Color(0xFF9999AA),
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+        return
+    }
+
     val isChild = msg.senderType == "child"
     val bubbleColor = if (isChild) BrandViolet else Color(0xFFEEEEF5)
     val textColor   = if (isChild) Color.White else Color(0xFF1A1A2E)
@@ -286,7 +319,11 @@ private fun MessageLogRow(msg: MessageLogEntry) {
                     Text("Media attachment", fontSize = 14.sp, color = textColor)
                 }
             } else {
-                Text("${msg.messageType} message", fontSize = 14.sp, color = textColor)
+                Text(
+                    msg.body ?: "${msg.messageType} message",
+                    fontSize = 14.sp,
+                    color = textColor
+                )
             }
         }
         Text(

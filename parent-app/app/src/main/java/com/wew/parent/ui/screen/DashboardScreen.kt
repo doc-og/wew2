@@ -36,10 +36,13 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Message
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.People
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -629,9 +632,29 @@ private fun activityDisplayFor(entry: ActivityLogEntry): ActivityDisplay =
             Icons.Default.Apps, ElectricViolet,
             "Opened ${entry.appName ?: entry.appPackage ?: "an app"}"
         )
-        "message_sent", "SMS_SENT", "MMS_SENT" -> ActivityDisplay(
+        "message_sent", "SMS_SENT", "MMS_SENT", "sms_sent" -> ActivityDisplay(
             Icons.Default.Message, Color(0xFF0EA5E9),
-            "Sent a message${entry.appName?.let { " via $it" } ?: ""}"
+            "Sent a text${entry.appName?.let { " via $it" } ?: ""}"
+        )
+        "mms_sent" -> ActivityDisplay(
+            Icons.Default.Message, Color(0xFF0EA5E9),
+            "Sent a photo message"
+        )
+        "video_watched" -> ActivityDisplay(
+            Icons.Default.PlayArrow, Color(0xFFEC4899),
+            "Video / streaming session${entry.appPackage?.let { " ($it)" } ?: ""}"
+        )
+        "game_session" -> ActivityDisplay(
+            Icons.Default.Star, Color(0xFF8B5CF6),
+            "Game session${entry.appPackage?.let { " ($it)" } ?: ""}"
+        )
+        "social_scroll" -> ActivityDisplay(
+            Icons.Default.Language, Color(0xFF06B6D4),
+            "Social / scroll session${entry.appPackage?.let { " ($it)" } ?: ""}"
+        )
+        "audio_streamed" -> ActivityDisplay(
+            Icons.Default.MusicNote, Color(0xFF14B8A6),
+            "Audio playback${entry.appPackage?.let { " ($it)" } ?: ""}"
         )
         "call_made" -> ActivityDisplay(Icons.Default.Phone, SafetyGreen, "Made a phone call")
         "call_received" -> ActivityDisplay(Icons.Default.Phone, Color(0xFF10B981), "Received a phone call")

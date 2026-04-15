@@ -2,6 +2,8 @@ package com.wew.launcher.ui.screen
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.telephony.SmsManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -42,8 +44,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
@@ -58,9 +58,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wew.launcher.ui.theme.BrandViolet
@@ -81,6 +84,7 @@ import java.util.Locale
 fun ConversationListScreen(
     viewModel: ConversationListViewModel,
     onOpenThread: (threadId: Long, address: String, displayName: String) -> Unit,
+    onOpenNewCompose: () -> Unit,
     onOpenContacts: () -> Unit,
     onOpenCheckIn: () -> Unit,
     onOpenMap: () -> Unit = {},
@@ -90,9 +94,23 @@ fun ConversationListScreen(
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
 
-    // Launch dialer when SOS is confirmed
+    // Launch dialer + send SOS SMS when SOS is confirmed
     LaunchedEffect(state.pendingEmergencyCall) {
         state.pendingEmergencyCall?.let { number ->
+            // Send the SOS SMS first
+            runCatching {
+                @Suppress("DEPRECATION")
+                val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                    context.getSystemService(SmsManager::class.java)
+                else
+                    SmsManager.getDefault()
+                smsManager?.sendTextMessage(
+                    number, null,
+                    "Please call me back I sent this from the SOS",
+                    null, null
+                )
+            }
+            // Then open the dialer
             val intent = Intent(Intent.ACTION_DIAL).apply {
                 data = Uri.parse("tel:$number")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -116,6 +134,7 @@ fun ConversationListScreen(
     // SOS confirmation dialog
     if (state.showSosConfirm) {
         SosConfirmDialog(
+            parentName = state.parentName,
             parentPhone = state.parentPhoneNumber,
             onConfirm = viewModel::confirmSos,
             onDismiss = viewModel::hideSosDialog
@@ -146,7 +165,7 @@ fun ConversationListScreen(
             TopBar(
                 state = state,
                 onMenuClick = { viewModel.showNavMenu() },
-                onNewConversation = { viewModel.showNewConversation() }
+                onNewConversation = onOpenNewCompose
             )
 
             if (state.isLoading) {
@@ -184,26 +203,8 @@ fun ConversationListScreen(
                         )
                     }
 
-                    // Quarantine indicator — not shown as clickable threads
-                    if (state.quarantineCount > 0) {
-                        item { QuarantineBanner(state.quarantineCount) }
-                    }
                 }
             }
-        }
-
-        // FAB — new conversation
-        FloatingActionButton(
-            onClick = { viewModel.showNewConversation() },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(24.dp)
-                .navigationBarsPadding(),
-            containerColor = BrandViolet,
-            contentColor = Color.White,
-            elevation = FloatingActionButtonDefaults.elevation(8.dp)
-        ) {
-            Icon(Icons.Default.Create, contentDescription = "New conversation")
         }
 
         // Tokens exhausted overlay
@@ -284,27 +285,6 @@ fun ConversationListScreen(
         }
     }
 
-    // New conversation sheet
-    if (state.showNewConversationSheet) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = { viewModel.hideNewConversation() },
-            sheetState = sheetState,
-            containerColor = Color(0xFF13131F),
-            dragHandle = null
-        ) {
-            NewConversationSheet(
-                approvedContacts = state.approvedContacts,
-                onSelectContact = { contact ->
-                    viewModel.hideNewConversation()
-                    val address = contact.phone ?: return@NewConversationSheet
-                    val threadId = com.wew.launcher.sms.SmsRepository(context)
-                        .getThreadIdForAddress(address)
-                    onOpenThread(threadId, address, contact.name)
-                }
-            )
-        }
-    }
 }
 
 // ── Top bar ───────────────────────────────────────────────────────────────────
@@ -325,45 +305,50 @@ private fun TopBar(
             Icon(Icons.Default.Menu, contentDescription = "Menu", tint = OnNight)
         }
 
-        Text(
-            text = "wew",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Medium,
-            color = ElectricViolet,
-            modifier = Modifier.weight(1f).padding(start = 4.dp)
-        )
+        Spacer(modifier = Modifier.weight(1f))
 
         TokenChip(tokens = state.currentTokens, daily = state.dailyTokenBudget)
 
-        Spacer(modifier = Modifier.width(4.dp))
+        Spacer(modifier = Modifier.weight(1f))
+
+        IconButton(onClick = onNewConversation) {
+            Icon(Icons.Default.Create, contentDescription = "New conversation", tint = OnNight)
+        }
     }
 }
 
 @Composable
 private fun TokenChip(tokens: Int, daily: Int) {
     val low = tokens < (daily * 0.2f)
-    val bg = if (low) WarningAmber.copy(alpha = 0.15f) else BrandViolet.copy(alpha = 0.15f)
-    val fg = if (low) WarningAmber else BrandViolet
+    // High-contrast chip on dark background (WCAG AA–oriented)
+    val bg = Color(0xFFF5F3FF)
+    val fg = Color(0xFF1A1A2E)
+    val borderColor = if (low) WarningAmber else Color(0xFF3D2FA8)
     Row(
         modifier = Modifier
+            .semantics {
+                contentDescription =
+                    "tokens remaining: ${formatTokens(tokens)} of ${formatTokens(daily)} daily budget"
+            }
             .clip(RoundedCornerShape(20.dp))
             .background(bg)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .border(1.5.dp, borderColor, RoundedCornerShape(20.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (low) {
             Icon(
                 Icons.Default.Warning,
-                contentDescription = null,
-                tint = WarningAmber,
-                modifier = Modifier.size(12.dp)
+                contentDescription = "low token warning",
+                tint = Color(0xFFB45309),
+                modifier = Modifier.size(16.dp)
             )
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(6.dp))
         }
         Text(
             text = formatTokens(tokens),
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
             color = fg
         )
     }
@@ -543,28 +528,6 @@ private fun EmptyState() {
 }
 
 @Composable
-private fun QuarantineBanner(count: Int) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(WarningAmber.copy(alpha = 0.1f))
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(Icons.Default.Warning, contentDescription = null, tint = WarningAmber, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = "$count message${if (count > 1) "s" else ""} from unknown contacts — waiting for parent approval",
-            fontSize = 13.sp,
-            color = WarningAmber,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
 private fun TokensExhaustedBanner(onRequestMore: () -> Unit) {
     Box(
         modifier = Modifier
@@ -730,68 +693,26 @@ private fun NavItem(label: String, onClick: () -> Unit) {
     }
 }
 
-// ── New conversation sheet ────────────────────────────────────────────────────
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun NewConversationSheet(
-    approvedContacts: List<com.wew.launcher.data.model.WewContact>,
-    onSelectContact: (com.wew.launcher.data.model.WewContact) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(24.dp)
-    ) {
-        Text("new conversation", fontSize = 20.sp, fontWeight = FontWeight.Medium, color = OnNight)
-        Spacer(Modifier.height(16.dp))
-        if (approvedContacts.isEmpty()) {
-            Text(
-                "no approved contacts yet — ask your parent to approve someone first.",
-                fontSize = 15.sp,
-                color = OnNight.copy(alpha = 0.55f),
-                lineHeight = 22.sp
-            )
-        } else {
-            LazyColumn {
-                items(approvedContacts) { contact ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(onClick = { onSelectContact(contact) })
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val color = ConversationListViewModel.avatarColorFor(contact.name)
-                        ContactAvatar(name = contact.name, color = color, isParent = false)
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(contact.name, fontSize = 16.sp, color = OnNight)
-                            contact.phone?.let {
-                                Text(it, fontSize = 13.sp, color = OnNight.copy(alpha = 0.5f))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 // ── SOS confirm dialog ────────────────────────────────────────────────────────
 
 @Composable
 private fun SosConfirmDialog(
+    parentName: String?,
     parentPhone: String?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val displayName = parentName.takeUnless { it.isNullOrBlank() } ?: "your parent"
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF1E1E2E),
         title = {
-            Text("call your parent?", color = Color(0xFFFF5C5C), fontWeight = FontWeight.Bold)
+            Text(
+                text = "Call $displayName",
+                color = Color(0xFFFF5C5C),
+                fontWeight = FontWeight.Bold
+            )
         },
         text = {
             if (parentPhone.isNullOrBlank()) {
@@ -802,9 +723,15 @@ private fun SosConfirmDialog(
                 )
             } else {
                 Text(
-                    text = "this will call $parentPhone immediately.",
-                    color = OnNight.copy(alpha = 0.85f),
-                    fontSize = 14.sp
+                    text = parentPhone,
+                    color = Color(0xFF93C5FD),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clickable {
+                        context.startActivity(
+                            Intent(Intent.ACTION_DIAL, Uri.parse("tel:${Uri.encode(parentPhone)}"))
+                        )
+                    }
                 )
             }
         },
@@ -812,21 +739,21 @@ private fun SosConfirmDialog(
             TextButton(
                 onClick = onConfirm,
                 enabled = !parentPhone.isNullOrBlank(),
-                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                colors = ButtonDefaults.textButtonColors(
                     contentColor = Color(0xFFFF5C5C)
                 )
             ) {
-                Text("call now", fontWeight = FontWeight.Bold)
+                Text("Call", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
-                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
+                colors = ButtonDefaults.textButtonColors(
                     contentColor = OnNight.copy(alpha = 0.6f)
                 )
             ) {
-                Text("cancel")
+                Text("Cancel")
             }
         }
     )

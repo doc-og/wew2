@@ -1,5 +1,6 @@
 package com.wew.launcher.service
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -27,6 +28,7 @@ import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.LocationLog
 import com.wew.launcher.data.model.Schedule
 import com.wew.launcher.data.repository.DeviceRepository
+import com.wew.launcher.token.TokenEngine
 import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -38,8 +40,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.ceil
 
 class LauncherForegroundService : Service() {
 
@@ -48,6 +52,18 @@ class LauncherForegroundService : Service() {
     private lateinit var repo: DeviceRepository
 
     private var scheduleCheckJob: Job? = null
+
+    /** Foreground media session (package leaving wew home). */
+    private var mediaSessionPkg: String? = null
+    private var mediaSessionStart: Long = 0L
+    private var mediaSessionAction: ActionType? = null
+
+    private val fallbackMediaPackages: Map<String, ActionType> = mapOf(
+        "com.google.android.youtube" to ActionType.VIDEO_WATCHED,
+        "com.zhiliaoapp.musically" to ActionType.SOCIAL_SCROLL,
+        "com.spotify.music" to ActionType.AUDIO_STREAMED,
+        "com.google.android.apps.youtube.music" to ActionType.AUDIO_STREAMED
+    )
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -104,6 +120,12 @@ class LauncherForegroundService : Service() {
     override fun onDestroy() {
         fusedLocationClient.removeLocationUpdates(locationCallback)
         scheduleCheckJob?.cancel()
+        val deviceId = getSharedPreferences("wew_prefs", Context.MODE_PRIVATE).getString("device_id", null)
+        if (deviceId != null) {
+            runBlocking {
+                runCatching { closeMediaSession(deviceId) }
+            }
+        }
         scope.cancel()
         super.onDestroy()
     }
@@ -132,10 +154,78 @@ class LauncherForegroundService : Service() {
                 val deviceId = prefs.getString("device_id", null)
                 if (deviceId != null) {
                     runCatching { checkScheduleLocks(deviceId) }
+                    runCatching { tickForegroundMedia(deviceId) }
                 }
                 delay(60_000L) // check every minute
             }
         }
+    }
+
+    private fun foregroundPackage(): String? {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val procs = am.runningAppProcesses ?: return null
+        for (p in procs) {
+            if (p.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
+                return p.pkgList?.firstOrNull()
+            }
+        }
+        return null
+    }
+
+    private suspend fun tickForegroundMedia(deviceId: String) {
+        val fg = foregroundPackage() ?: return
+        if (fg == packageName) {
+            closeMediaSession(deviceId)
+            return
+        }
+        val fromDb = repo.getAppMediaActionType(deviceId, fg)
+        val action = fromDb?.let { ActionType.fromValue(it) }
+            ?: fallbackMediaPackages[fg]
+            ?: return
+
+        if (fg != mediaSessionPkg) {
+            closeMediaSession(deviceId)
+            mediaSessionPkg = fg
+            mediaSessionStart = System.currentTimeMillis()
+            mediaSessionAction = action
+        }
+    }
+
+    private suspend fun closeMediaSession(deviceId: String) {
+        val pkg = mediaSessionPkg ?: return
+        val action = mediaSessionAction ?: return
+        val start = mediaSessionStart
+        if (start <= 0L) {
+            clearMediaSessionState()
+            return
+        }
+        val elapsed = System.currentTimeMillis() - start
+        if (elapsed < 30_000L) {
+            clearMediaSessionState()
+            return
+        }
+        val minutes = ceil(elapsed / 60_000.0).toInt().coerceAtLeast(1)
+        val cost = TokenEngine.calculateCost(action, durationUnits = minutes)
+        if (cost > 0) {
+            repo.consumeTokens(
+                deviceId = deviceId,
+                amount = cost,
+                actionType = action.value,
+                appPackage = pkg,
+                appName = null,
+                contextMetadata = mapOf(
+                    "duration_minutes" to minutes.toString(),
+                    "app_package" to pkg
+                )
+            )
+        }
+        clearMediaSessionState()
+    }
+
+    private fun clearMediaSessionState() {
+        mediaSessionPkg = null
+        mediaSessionAction = null
+        mediaSessionStart = 0L
     }
 
     private suspend fun checkScheduleLocks(deviceId: String) {

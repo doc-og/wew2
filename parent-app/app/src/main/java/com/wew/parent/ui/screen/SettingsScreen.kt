@@ -48,6 +48,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wew.parent.data.model.Device
 import com.wew.parent.data.model.NotificationConfig
 import com.wew.parent.data.repository.ParentRepository
 import com.wew.parent.ui.theme.BrandViolet
@@ -80,6 +81,12 @@ fun SettingsScreen(userId: String, deviceId: String) {
     var showPinEntry by remember { mutableStateOf(false) }
     var pinInput by remember { mutableStateOf("") }
 
+    var deviceRow by remember { mutableStateOf<Device?>(null) }
+    var parentPhoneInput by remember { mutableStateOf("") }
+    var parentNameInput by remember { mutableStateOf("") }
+    var timezoneInput by remember { mutableStateOf("America/Los_Angeles") }
+    var parentContactSaved by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(userId) {
         config = repo.getNotificationConfig(userId)
         config?.let {
@@ -89,6 +96,14 @@ fun SettingsScreen(userId: String, deviceId: String) {
             notifyTamperAttempts = it.notifyTamperAttempts
         }
         hasPasscode = repo.getPasscode(deviceId) != null
+    }
+
+    LaunchedEffect(deviceId) {
+        val d = repo.getDevice(deviceId)
+        deviceRow = d
+        parentPhoneInput = d?.parentPhone.orEmpty()
+        parentNameInput = d?.parentDisplayName.orEmpty()
+        timezoneInput = d?.timezone ?: "America/Los_Angeles"
     }
 
     Column(
@@ -203,6 +218,63 @@ fun SettingsScreen(userId: String, deviceId: String) {
                         }
                     }
                 }
+            }
+        }
+
+        // How your child reaches you (SOS + WeW Parent thread)
+        SectionCard(title = "Your contact on child phone") {
+            Text(
+                "Add the number your child should call in an emergency. It also labels the parent chat.",
+                fontSize = 12.sp,
+                color = Color(0xFF6B6B8A),
+                lineHeight = 17.sp
+            )
+            OutlinedTextField(
+                value = parentPhoneInput,
+                onValueChange = { parentPhoneInput = it },
+                label = { Text("Your mobile number") },
+                placeholder = { Text("+1…") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = parentNameInput,
+                onValueChange = { parentNameInput = it },
+                label = { Text("How your name appears") },
+                placeholder = { Text("Mom") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = timezoneInput,
+                onValueChange = { timezoneInput = it },
+                label = { Text("Home timezone (IANA)") },
+                placeholder = { Text("America/Los_Angeles") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            parentContactSaved?.let { msg ->
+                Text(msg, fontSize = 13.sp, color = SafetyGreen)
+            }
+            Button(
+                onClick = {
+                    scope.launch {
+                        runCatching {
+                            repo.updateDeviceParentContact(
+                                deviceId = deviceId,
+                                parentPhone = parentPhoneInput,
+                                parentDisplayName = parentNameInput,
+                                timezone = timezoneInput
+                            )
+                            parentContactSaved = "Saved"
+                        }.onFailure { parentContactSaved = it.message ?: "Could not save" }
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = BrandViolet),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Save contact info")
             }
         }
 
