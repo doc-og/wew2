@@ -26,6 +26,7 @@ object NotificationPolicyStore {
 
         notifyBadgesChanged(context)
         context.sendBroadcast(Intent(ACTION_POLICY_CHANGED).setPackage(context.packageName))
+        PostNotificationPolicySync.sync(context, apps)
     }
 
     fun isNotificationAllowed(context: Context, packageName: String): Boolean {
