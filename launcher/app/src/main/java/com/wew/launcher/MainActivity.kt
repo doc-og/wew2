@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -24,6 +25,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.wew.launcher.service.LauncherForegroundService
 import com.wew.launcher.service.WewDeviceAdminReceiver
+import com.wew.launcher.service.WewNotificationListenerService
 import com.wew.launcher.ui.screen.ChatScreen
 import com.wew.launcher.ui.screen.CheckInScreen
 import com.wew.launcher.ui.screen.ContactsScreen
@@ -62,8 +64,7 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        startForegroundService()
-        maybeRequestCallScreeningRole()
+        ensureRuntimePermissionsFlow()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,8 +79,6 @@ class MainActivity : ComponentActivity() {
         if (adminNotActive || !hasDeviceId) {
             startActivity(Intent(this, SetupActivity::class.java))
         }
-
-        requestPermissionsThenStartService()
 
         setContent {
             WewLauncherTheme {
@@ -172,10 +171,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requestPermissionsThenStartService() {
+    override fun onResume() {
+        super.onResume()
+        ensureRuntimePermissionsFlow()
+    }
+
+    /**
+     * Ask for location first (foreground), then the rest, so the system location prompt
+     * shows as soon as the launcher is foregrounded — including after setup or revoking in Settings.
+     */
+    private fun ensureRuntimePermissionsFlow() {
+        if (!hasFineOrCoarseLocation()) {
+            permissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+            return
+        }
+
         val needed = mutableListOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.READ_SMS,
             Manifest.permission.RECEIVE_SMS,
             Manifest.permission.CALL_PHONE,
@@ -193,28 +209,73 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
 
-        if (missing.isEmpty()) {
-            startForegroundService()
-            maybeRequestCallScreeningRole()
-        } else {
+        if (missing.isNotEmpty()) {
             permissionLauncher.launch(missing.toTypedArray())
+            return
+        }
+
+        onAllRuntimePermissionsHandled()
+    }
+
+    private fun hasFineOrCoarseLocation(): Boolean {
+        val fine = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        val coarse = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        return fine || coarse
+    }
+
+    private fun onAllRuntimePermissionsHandled() {
+        startForegroundService()
+        if (!maybeRequestCallScreeningRole()) {
+            maybeRequestNotificationListenerAccess()
         }
     }
 
     /** One-time prompt: set WeW as call screening app so unknown numbers are blocked + parent notified. */
-    private fun maybeRequestCallScreeningRole() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+    private fun maybeRequestCallScreeningRole(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         val prefs = getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("wew_prompted_call_screening", false)) return
-        val rm = getSystemService(RoleManager::class.java) ?: return
+        if (prefs.getBoolean("wew_prompted_call_screening", false)) return false
+        val rm = getSystemService(RoleManager::class.java) ?: return false
         if (rm.isRoleHeld(RoleManager.ROLE_CALL_SCREENING)) {
             prefs.edit().putBoolean("wew_prompted_call_screening", true).apply()
-            return
+            return false
         }
         prefs.edit().putBoolean("wew_prompted_call_screening", true).apply()
         runCatching {
             startActivity(rm.createRequestRoleIntent(RoleManager.ROLE_CALL_SCREENING))
         }
+        return true
+    }
+
+    private fun maybeRequestNotificationListenerAccess() {
+        val prefs = getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("wew_prompted_notification_listener", false)) return
+        if (isNotificationListenerEnabled()) {
+            prefs.edit().putBoolean("wew_prompted_notification_listener", true).apply()
+            return
+        }
+        prefs.edit().putBoolean("wew_prompted_notification_listener", true).apply()
+        runCatching {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
+    }
+
+    private fun isNotificationListenerEnabled(): Boolean {
+        val enabledListeners = Settings.Secure.getString(
+            contentResolver,
+            "enabled_notification_listeners"
+        ) ?: return false
+        val listenerComponent = ComponentName(this, WewNotificationListenerService::class.java)
+        return enabledListeners
+            .split(':')
+            .mapNotNull { ComponentName.unflattenFromString(it) }
+            .any { it == listenerComponent }
     }
 
     private fun startForegroundService() {

@@ -12,6 +12,7 @@ import com.wew.parent.data.model.LocationPoint
 import com.wew.parent.data.model.DevicePasscode
 import com.wew.parent.data.model.MessageLogEntry
 import com.wew.parent.data.model.NotificationConfig
+import com.wew.parent.data.model.AccessScheduleDay
 import com.wew.parent.data.model.Schedule
 import com.wew.parent.data.model.UrlAccessRequest
 import io.github.jan.supabase.gotrue.auth
@@ -333,6 +334,31 @@ class ParentRepository {
 
     suspend fun upsertSchedule(schedule: Schedule) {
         supabase.postgrest["schedules"].upsert(schedule, onConflict = "device_id,schedule_type")
+    }
+
+    // Access schedule — one row per day of week (0=Sun … 6=Sat)
+    suspend fun getAccessSchedule(deviceId: String): List<AccessScheduleDay> {
+        return supabase.postgrest["access_schedule"]
+            .select(Columns.ALL) {
+                filter { eq("device_id", deviceId) }
+                order("day_of_week", Order.ASCENDING)
+            }
+            .decodeList()
+    }
+
+    suspend fun upsertAccessSchedule(days: List<AccessScheduleDay>) {
+        days.forEach { day ->
+            supabase.postgrest["access_schedule"].upsert(
+                buildJsonObject {
+                    put("device_id", day.deviceId)
+                    put("day_of_week", day.dayOfWeek)
+                    put("is_enabled", day.isEnabled)
+                    put("allowed_start", day.allowedStart)
+                    put("allowed_end", day.allowedEnd)
+                },
+                onConflict = "device_id,day_of_week"
+            )
+        }
     }
 
     // Notification config

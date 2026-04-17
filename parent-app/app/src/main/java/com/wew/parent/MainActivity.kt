@@ -58,6 +58,7 @@ import com.wew.parent.ui.screen.DashboardScreen
 import com.wew.parent.ui.screen.LoginScreen
 import com.wew.parent.ui.screen.MessagesScreen
 import com.wew.parent.ui.screen.RegisterDeviceScreen
+import com.wew.parent.ui.screen.AccessScheduleScreen
 import com.wew.parent.ui.screen.SettingsScreen
 import com.wew.parent.ui.screen.UrlApprovalsScreen
 import com.wew.parent.ui.theme.BrandViolet
@@ -305,7 +306,23 @@ fun WewParentApp() {
                     if (deviceId.isNotEmpty()) UrlApprovalsScreen(deviceId = deviceId)
                 }
                 composable("settings") {
-                    SettingsScreen(userId = userId, deviceId = deviceId)
+                    SettingsScreen(
+                        userId = userId,
+                        deviceId = deviceId,
+                        onOpenSchedule = {
+                            navController.navigate("access_schedule") {
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                }
+                composable("access_schedule") {
+                    if (deviceId.isNotEmpty()) {
+                        AccessScheduleScreen(
+                            deviceId = deviceId,
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
                 }
             }
         }

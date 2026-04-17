@@ -26,6 +26,7 @@ import com.wew.launcher.data.SupabaseClient
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.LocationLog
+import com.wew.launcher.data.model.AccessScheduleDay
 import com.wew.launcher.data.model.Schedule
 import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.token.TokenEngine
@@ -229,11 +230,12 @@ class LauncherForegroundService : Service() {
     }
 
     private suspend fun checkScheduleLocks(deviceId: String) {
-        val schedules = repo.getSchedules(deviceId)
         val now = LocalTime.now()
         val dayOfWeek = java.time.DayOfWeek.from(java.time.LocalDate.now()).value % 7 // 0=Sun
 
-        val shouldLock = schedules.any { schedule ->
+        // Bedtime/school schedules: lock when INSIDE the blocked window
+        val schedules = repo.getSchedules(deviceId)
+        val blockedBySchedule = schedules.any { schedule ->
             if (!schedule.isEnabled) return@any false
             if (!schedule.daysOfWeek.contains(dayOfWeek)) return@any false
             val start = LocalTime.parse(schedule.startTime, DateTimeFormatter.ofPattern("HH:mm:ss"))
@@ -246,8 +248,29 @@ class LauncherForegroundService : Service() {
             }
         }
 
-        // Update lock state in Supabase
+        // Access schedule: lock when OUTSIDE the parent-defined allowed window
+        val accessDays = repo.getAccessSchedule(deviceId)
+        val todayAccess = accessDays.firstOrNull { it.dayOfWeek == dayOfWeek }
+        val blockedByAccessSchedule = if (todayAccess != null && todayAccess.isEnabled) {
+            val start = LocalTime.parse(todayAccess.allowedStart, DateTimeFormatter.ofPattern("HH:mm:ss"))
+            val end = LocalTime.parse(todayAccess.allowedEnd, DateTimeFormatter.ofPattern("HH:mm:ss"))
+            if (start.isBefore(end)) {
+                // Normal window (07:00–21:00): locked before start or after end
+                now.isBefore(start) || now.isAfter(end)
+            } else {
+                // Inverted overnight window — locked in the gap between end and start
+                now.isBefore(start) && now.isAfter(end)
+            }
+        } else {
+            false // no access rule for today → no restriction from this rule
+        }
+
+        val shouldLock = blockedBySchedule || blockedByAccessSchedule
+
+        // Persist access-schedule flag separately so the UI can display the right message
         val prefs = getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("access_schedule_locked", blockedByAccessSchedule).apply()
+
         val currentlyLocked = prefs.getBoolean("schedule_locked", false)
         if (shouldLock != currentlyLocked) {
             prefs.edit().putBoolean("schedule_locked", shouldLock).apply()

@@ -1,12 +1,15 @@
 package com.wew.launcher.ui.viewmodel
 
 import android.app.Application
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wew.launcher.data.model.ActionType
@@ -14,6 +17,7 @@ import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.AppInfo
 import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.service.LauncherForegroundService
+import com.wew.launcher.service.NotificationPolicyStore
 import com.wew.launcher.token.TokenEngine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,13 +52,27 @@ data class HomeUiState(
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repo = DeviceRepository(application)
+    private val appContext = application.applicationContext
 
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     private val prefs = application.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+    private val badgeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            _uiState.update {
+                it.copy(appsWithNotifications = NotificationPolicyStore.getBadgePackages(appContext))
+            }
+        }
+    }
 
     init {
+        ContextCompat.registerReceiver(
+            appContext,
+            badgeReceiver,
+            IntentFilter(NotificationPolicyStore.ACTION_BADGES_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         startForegroundService()
         loadState()
     }
@@ -74,18 +92,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 repo.syncAppList(deviceId, getApplication())
                 val device = repo.getDevice(deviceId)
-                val whitelistedApps = repo.getWhitelistedApps(deviceId)
-                val pm = getApplication<Application>().packageManager
-                val appInfoList = whitelistedApps.map { record ->
-                    val icon = runCatching { pm.getApplicationIcon(record.packageName) }.getOrNull()
-                    AppInfo(
-                        packageName = record.packageName,
-                        appName = record.appName,
-                        icon = icon,
-                        isWhitelisted = true,
-                        tokenCost = TokenEngine.defaults[ActionType.APP_OPEN]?.baseTokens ?: 5
-                    )
-                }
+                val appPolicies = repo.getAppPolicies(deviceId)
+                NotificationPolicyStore.writePolicies(appContext, appPolicies)
+                val appInfoList = buildWhitelistedAppList(appPolicies)
                 val passcode = repo.getDevicePasscode(deviceId)
                 val tempAccess = repo.getActiveTempAccess(deviceId)
                 val tempAccessMap = tempAccess.associate { it.packageName to it.expiresAt }
@@ -100,6 +109,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         tokensExhausted = device.currentTokens <= 0,
                         isLoading = false,
                         deviceId = deviceId,
+                        appsWithNotifications = NotificationPolicyStore.getBadgePackages(appContext),
                         passcodeHash = passcode?.passcodeHash,
                         activeTempAccess = tempAccessMap,
                         tokenCostOverrides = costOverrides
@@ -118,19 +128,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             while (true) {
                 delay(30_000)
                 runCatching {
-                    val whitelistedApps = repo.getWhitelistedApps(deviceId)
+                    val appPolicies = repo.getAppPolicies(deviceId)
+                    NotificationPolicyStore.writePolicies(appContext, appPolicies)
                     val device = repo.getDevice(deviceId)
-                    val pm = getApplication<Application>().packageManager
-                    val appInfoList = whitelistedApps.mapNotNull { record ->
-                        val icon = runCatching { pm.getApplicationIcon(record.packageName) }.getOrNull()
-                        AppInfo(
-                            packageName = record.packageName,
-                            appName = record.appName,
-                            icon = icon,
-                            isWhitelisted = true,
-                            tokenCost = TokenEngine.defaults[ActionType.APP_OPEN]?.baseTokens ?: 5
-                        )
-                    }
+                    val appInfoList = buildWhitelistedAppList(appPolicies)
                     val tempAccess = repo.getActiveTempAccess(deviceId)
                     val tempAccessMap = tempAccess.associate { it.packageName to it.expiresAt }
                     _uiState.update {
@@ -140,6 +141,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                             dailyTokenBudget = device.dailyTokenBudget,
                             isLocked = device.isLocked,
                             tokensExhausted = device.currentTokens <= 0,
+                            appsWithNotifications = NotificationPolicyStore.getBadgePackages(appContext),
                             activeTempAccess = tempAccessMap
                         )
                     }
@@ -174,19 +176,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val deviceId = prefs.getString("device_id", null) ?: return
         viewModelScope.launch {
             runCatching {
-                val whitelistedApps = repo.getWhitelistedApps(deviceId)
-                val pm = getApplication<Application>().packageManager
-                val appInfoList = whitelistedApps.mapNotNull { record ->
-                    val icon = runCatching { pm.getApplicationIcon(record.packageName) }.getOrNull()
-                    AppInfo(
-                        packageName = record.packageName,
-                        appName = record.appName,
-                        icon = icon,
-                        isWhitelisted = true,
-                        tokenCost = TokenEngine.defaults[ActionType.APP_OPEN]?.baseTokens ?: 5
+                val appPolicies = repo.getAppPolicies(deviceId)
+                NotificationPolicyStore.writePolicies(appContext, appPolicies)
+                _uiState.update {
+                    it.copy(
+                        apps = buildWhitelistedAppList(appPolicies),
+                        appsWithNotifications = NotificationPolicyStore.getBadgePackages(appContext)
                     )
                 }
-                _uiState.update { it.copy(apps = appInfoList) }
             }.onFailure { Log.e("WewSync", "refreshApps failed: ${it.message}") }
         }
     }
@@ -213,6 +210,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         if (result.success) {
             hapticFeedback()
+            NotificationPolicyStore.clearBadge(appContext, app.packageName)
             _uiState.update {
                 it.copy(
                     currentTokens = result.newBalance,
@@ -400,9 +398,28 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun markAppNotification(packageName: String) {
+        NotificationPolicyStore.setBadgeVisible(appContext, packageName, visible = true)
         _uiState.update {
             it.copy(appsWithNotifications = it.appsWithNotifications + packageName)
         }
+    }
+
+    private fun buildWhitelistedAppList(appPolicies: List<com.wew.launcher.data.model.AppRecord>): List<AppInfo> {
+        val pm = getApplication<Application>().packageManager
+        return appPolicies
+            .asSequence()
+            .filter { it.isWhitelisted }
+            .map { record ->
+                val icon = runCatching { pm.getApplicationIcon(record.packageName) }.getOrNull()
+                AppInfo(
+                    packageName = record.packageName,
+                    appName = record.appName,
+                    icon = icon,
+                    isWhitelisted = true,
+                    tokenCost = TokenEngine.defaults[ActionType.APP_OPEN]?.baseTokens ?: 5
+                )
+            }
+            .toList()
     }
 
     private fun hashPin(deviceId: String, pin: String): String {
@@ -427,5 +444,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
         vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+    }
+
+    override fun onCleared() {
+        runCatching { appContext.unregisterReceiver(badgeReceiver) }
+        super.onCleared()
     }
 }

@@ -223,6 +223,19 @@ class DeviceRepository(private val context: Context) {
             .decodeList()
     }
 
+    suspend fun getAppPolicies(deviceId: String): List<AppRecord> {
+        return runCatching {
+            supabase.postgrest["apps"]
+                .select(Columns.ALL) {
+                    filter { eq("device_id", deviceId) }
+                }
+                .decodeList<AppRecord>()
+        }.getOrElse {
+            Log.e("WewSync", "getAppPolicies failed: ${it.message}", it)
+            emptyList()
+        }
+    }
+
     suspend fun getAppMediaActionType(deviceId: String, packageName: String): String? {
         return runCatching {
             supabase.postgrest["apps"]
@@ -284,6 +297,17 @@ class DeviceRepository(private val context: Context) {
                 }
             }
             .decodeList()
+    }
+
+    suspend fun getAccessSchedule(deviceId: String): List<com.wew.launcher.data.model.AccessScheduleDay> {
+        return runCatching {
+            supabase.postgrest["access_schedule"]
+                .select(Columns.ALL) { filter { eq("device_id", deviceId) } }
+                .decodeList()
+        }.getOrElse {
+            Log.w("WewSchedule", "getAccessSchedule: ${it.message}")
+            emptyList()
+        }
     }
 
     // ── Passcode + temp access ────────────────────────────────────────────────

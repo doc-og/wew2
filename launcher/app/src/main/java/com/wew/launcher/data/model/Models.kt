@@ -54,6 +54,7 @@ data class AppRecord(
     @SerialName("package_name") val packageName: String,
     @SerialName("app_name")     val appName: String,
     @SerialName("is_whitelisted") val isWhitelisted: Boolean = false,
+    @SerialName("notifications_enabled") val notificationsEnabled: Boolean = false,
     @SerialName("is_system_app")  val isSystemApp: Boolean   = false,
     @SerialName("credit_cost")    val creditCost: Int        = 1,   // legacy column; token cost comes from TokenEngine
     /** When set, foreground time in this app bills as this media action (see TOKEN_SYSTEM.md). */
@@ -220,6 +221,22 @@ data class LocationLog(
     val longitude: Double,
     @SerialName("accuracy_meters") val accuracyMeters: Float? = null,
     @SerialName("created_at")       val createdAt: String?    = null
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Access schedule (per-day phone hours set by parent)
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Serializable
+data class AccessScheduleDay(
+    val id: String? = null,
+    @SerialName("device_id")      val deviceId: String,
+    /** 0 = Sunday, 1 = Monday, …, 6 = Saturday (matches Java DayOfWeek.value % 7) */
+    @SerialName("day_of_week")    val dayOfWeek: Int,
+    @SerialName("is_enabled")     val isEnabled: Boolean = true,
+    /** "HH:mm:ss" 24-hour time */
+    @SerialName("allowed_start")  val allowedStart: String = "07:00:00",
+    @SerialName("allowed_end")    val allowedEnd: String   = "21:00:00"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

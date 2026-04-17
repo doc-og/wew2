@@ -206,10 +206,20 @@ fun AppsScreen(deviceId: String) {
                     onToggle = { app ->
                         val newState = !app.isWhitelisted
                         apps = apps.map {
-                            if (it.id == app.id) it.copy(isWhitelisted = newState) else it
+                            if (it.id == app.id) {
+                                it.copy(
+                                    isWhitelisted = newState,
+                                    notificationsEnabled = if (newState) it.notificationsEnabled else false
+                                )
+                            } else {
+                                it
+                            }
                         }
                         scope.launch {
                             runCatching { repo.updateAppWhitelist(app.id, newState) }
+                            if (!newState) {
+                                runCatching { repo.updateAppNotifications(app.id, false) }
+                            }
                             // Maps enabled → request location sharing from device
                             if (newState && app.packageName == "com.google.android.apps.maps") {
                                 runCatching { repo.requestLocationSharing(deviceId) }

@@ -152,6 +152,20 @@ data class UrlAccessRequest(
     @SerialName("created_at") val createdAt: String? = null
 )
 
+// ── Access schedule ───────────────────────────────────────────────────────────
+
+@Serializable
+data class AccessScheduleDay(
+    val id: String? = null,
+    @SerialName("device_id")      val deviceId: String,
+    /** 0 = Sunday, 1 = Monday, …, 6 = Saturday */
+    @SerialName("day_of_week")    val dayOfWeek: Int,
+    @SerialName("is_enabled")     val isEnabled: Boolean = true,
+    /** "HH:mm:ss" 24-hour time */
+    @SerialName("allowed_start")  val allowedStart: String = "07:00:00",
+    @SerialName("allowed_end")    val allowedEnd: String   = "21:00:00"
+)
+
 // ── Message log ───────────────────────────────────────────────────────────────
 
 @Serializable

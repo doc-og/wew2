@@ -17,6 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -65,7 +69,11 @@ private val timeoutOptions = listOf(
 )
 
 @Composable
-fun SettingsScreen(userId: String, deviceId: String) {
+fun SettingsScreen(
+    userId: String,
+    deviceId: String,
+    onOpenSchedule: () -> Unit = {}
+) {
     val repo = remember { ParentRepository() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -127,6 +135,54 @@ fun SettingsScreen(userId: String, deviceId: String) {
             color = Color(0xFF6B6B8A)
         )
         Spacer(Modifier.height(20.dp))
+
+        // Access schedule section
+        SectionCard(title = "Phone access") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onOpenSchedule)
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(BrandViolet.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Schedule,
+                        contentDescription = null,
+                        tint = BrandViolet,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(Modifier.padding(start = 12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Access schedule",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF1A1A2E)
+                    )
+                    Text(
+                        "Set allowed hours for each day of the week",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6B6B8A),
+                        lineHeight = 17.sp
+                    )
+                }
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = Color(0xFFCCCCDD),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
 
         // Security section
         SectionCard(title = "Security") {
