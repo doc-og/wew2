@@ -42,7 +42,9 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -301,7 +303,8 @@ fun ChatScreen(
                     NewComposeRecipientMultiselect(
                         pool = recipientPool,
                         selected = state.selectedRecipients,
-                        onSelectionChange = vm::setRecipients
+                        onSelectionChange = vm::setRecipients,
+                        onBack = onBack
                     )
                 }
             }
@@ -392,7 +395,8 @@ private fun chatFieldColors() = OutlinedTextFieldDefaults.colors(
 private fun NewComposeRecipientMultiselect(
     pool: List<WewContact>,
     selected: List<WewContact>,
-    onSelectionChange: (List<WewContact>) -> Unit
+    onSelectionChange: (List<WewContact>) -> Unit,
+    onBack: () -> Unit = {}
 ) {
     var query by remember { mutableStateOf("") }
     val qTrim = query.trim()
@@ -411,29 +415,58 @@ private fun NewComposeRecipientMultiselect(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 12.dp)
     ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            placeholder = {
-                Text(
-                    "search name, nickname, number, relationship…",
-                    color = OnNight.copy(alpha = 0.35f),
-                    fontSize = 14.sp
-                )
-            },
-            leadingIcon = {
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
                 Icon(
-                    Icons.Default.Search,
-                    contentDescription = null,
-                    tint = OnNight.copy(alpha = 0.45f)
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = OnNight
                 )
-            },
-            singleLine = true,
-            shape = RoundedCornerShape(12.dp),
-            colors = chatFieldColors(),
-            textStyle = TextStyle(fontSize = 15.sp, color = OnNight)
-        )
+            }
+            Spacer(Modifier.width(4.dp))
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(40.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xFF1E1E2E))
+                    .border(
+                        width = 1.dp,
+                        color = OnNight.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = null,
+                    tint = OnNight.copy(alpha = 0.55f),
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Box(modifier = Modifier.weight(1f)) {
+                    if (query.isEmpty()) {
+                        Text(
+                            "Add Contact",
+                            color = OnNight.copy(alpha = 0.35f),
+                            fontSize = 14.sp
+                        )
+                    }
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = TextStyle(fontSize = 14.sp, color = OnNight),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(BrandViolet),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
         if (selected.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
