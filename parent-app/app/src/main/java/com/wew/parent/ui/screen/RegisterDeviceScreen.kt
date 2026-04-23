@@ -48,7 +48,10 @@ import com.wew.parent.util.toUserMessage
 import kotlinx.coroutines.launch
 
 @Composable
-fun RegisterDeviceScreen(onDeviceRegistered: () -> Unit) {
+fun RegisterDeviceScreen(
+    setupMode: Boolean = false,
+    onDeviceRegistered: (deviceId: String) -> Unit
+) {
     val repo = remember { ParentRepository() }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -135,7 +138,14 @@ fun RegisterDeviceScreen(onDeviceRegistered: () -> Unit) {
                         isLoading = true
                         errorMessage = null
                         runCatching { repo.registerDevice(deviceName.trim()) }
-                            .onSuccess { device -> registeredDeviceId = device.id }
+                            .onSuccess { device ->
+                                if (setupMode) {
+                                    // Return device ID directly to the launcher — skip copy screen
+                                    onDeviceRegistered(device.id)
+                                } else {
+                                    registeredDeviceId = device.id
+                                }
+                            }
                             .onFailure { e ->
                                 errorMessage = e.toUserMessage("Couldn't register device — please try again")
                             }
@@ -250,7 +260,7 @@ fun RegisterDeviceScreen(onDeviceRegistered: () -> Unit) {
             Spacer(Modifier.height(12.dp))
 
             Button(
-                onClick = onDeviceRegistered,
+                onClick = { onDeviceRegistered(registeredDeviceId!!) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF27AE60)),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth().height(56.dp)

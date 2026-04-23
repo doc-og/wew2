@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wew.launcher.data.model.ContactAuthRequest
 import com.wew.launcher.data.model.WewContact
+import com.wew.launcher.data.model.isApprovedForComms
 import com.wew.launcher.data.repository.DeviceRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,12 +42,15 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
             val contacts = repo.getContacts(deviceId)
             val requests = repo.getAuthRequests(deviceId)
 
-            // Build merged auth map: auth_requests rows first, then override with
-            // contacts.is_authorized = true (set when parent approves in parent app).
+            // Auth map for UI: server auth_requests, overridden by parent-approved contacts.
             val mergedMap = buildMap<String, String> {
                 for (req in requests) put(req.contactId, req.status)
                 for (contact in contacts) {
-                    if (contact.isAuthorized) put(contact.id ?: "", "approved")
+                    val id = contact.id ?: ""
+                    when {
+                        contact.isApprovedForComms() -> put(id, "approved")
+                        contact.status?.equals("blocked", ignoreCase = true) == true -> put(id, "denied")
+                    }
                 }
             }
             _uiState.update {

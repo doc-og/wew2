@@ -13,12 +13,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Button
@@ -72,7 +74,8 @@ private val timeoutOptions = listOf(
 fun SettingsScreen(
     userId: String,
     deviceId: String,
-    onOpenSchedule: () -> Unit = {}
+    onOpenSchedule: () -> Unit = {},
+    onOpenChildPermissions: () -> Unit = {}
 ) {
     val repo = remember { ParentRepository() }
     val scope = rememberCoroutineScope()
@@ -170,6 +173,51 @@ fun SettingsScreen(
                     )
                     Text(
                         "Set allowed hours for each day of the week",
+                        fontSize = 12.sp,
+                        color = Color(0xFF6B6B8A),
+                        lineHeight = 17.sp
+                    )
+                }
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = Color(0xFFCCCCDD),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onOpenChildPermissions)
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(androidx.compose.foundation.shape.CircleShape)
+                        .background(BrandViolet.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.PhoneAndroid,
+                        contentDescription = null,
+                        tint = BrandViolet,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(Modifier.padding(start = 12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Child phone permissions",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF1A1A2E)
+                    )
+                    Text(
+                        "Default SMS app and SMS access reported from your child's device",
                         fontSize = 12.sp,
                         color = Color(0xFF6B6B8A),
                         lineHeight = 17.sp

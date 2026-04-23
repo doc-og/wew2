@@ -1,7 +1,9 @@
 package com.wew.launcher.ui.screen
 
+import android.app.Activity
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import android.telephony.SmsManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -45,10 +47,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -70,10 +70,12 @@ import com.wew.launcher.ui.theme.ElectricViolet
 import com.wew.launcher.ui.theme.Night
 import com.wew.launcher.ui.theme.OnNight
 import com.wew.launcher.ui.theme.WarningAmber
+import com.wew.launcher.ui.viewmodel.ApprovedApp
 import com.wew.launcher.ui.viewmodel.ConversationItem
 import com.wew.launcher.ui.viewmodel.ConversationListUiState
 import com.wew.launcher.telecom.WewCallManager
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
+import androidx.compose.ui.graphics.asImageBitmap
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -89,7 +91,8 @@ fun ConversationListScreen(
     onOpenCheckIn: () -> Unit,
     onOpenMap: () -> Unit = {},
     onOpenCalendar: (String) -> Unit = {},
-    onOpenWeather: (String) -> Unit = {}
+    onOpenWeather: (String) -> Unit = {},
+    onOpenApp: (String) -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -122,13 +125,23 @@ fun ConversationListScreen(
         }
     }
 
-    // Launch parent app when passcode verified
+    // Launch parent app when passcode verified (preserve launch intent flags — do not assign flags =)
     LaunchedEffect(state.pendingLaunchParentApp) {
-        if (state.pendingLaunchParentApp) {
-            val intent = context.packageManager
-                .getLaunchIntentForPackage("com.wew.parent")
-                ?.apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
-            intent?.let { context.startActivity(it) }
+        if (!state.pendingLaunchParentApp) return@LaunchedEffect
+        val intent = context.packageManager.getLaunchIntentForPackage("com.wew.parent")?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            if (intent == null) {
+                Log.e("ConversationList", "com.wew.parent not installed or no LAUNCHER intent")
+            } else {
+                val act = context as? Activity
+                if (act != null) act.startActivity(intent)
+                else context.startActivity(intent)
+            }
+        } catch (e: Exception) {
+            Log.e("ConversationList", "failed to open parent app", e)
+        } finally {
             viewModel.clearPendingLaunchParentApp()
         }
     }
@@ -271,6 +284,7 @@ fun ConversationListScreen(
             NavigationMenuSheet(
                 currentTokens = state.currentTokens,
                 dailyBudget = state.dailyTokenBudget,
+                approvedApps = state.approvedApps,
                 onConversations = { viewModel.hideNavMenu() },
                 onContacts = { viewModel.hideNavMenu(); onOpenContacts() },
                 onCheckIn = { viewModel.hideNavMenu(); onOpenCheckIn() },
@@ -282,6 +296,7 @@ fun ConversationListScreen(
                 onOpenWeather = state.approvedWeatherPackage?.let { pkg ->
                     { viewModel.hideNavMenu(); onOpenWeather(pkg) }
                 },
+                onOpenApp = { pkg -> viewModel.hideNavMenu(); onOpenApp(pkg) },
                 onSos = { viewModel.hideNavMenu(); viewModel.showSosDialog() }
             )
         }
@@ -586,6 +601,7 @@ private fun ContextMenuItem(label: String, destructive: Boolean = false, onClick
 fun NavigationMenuSheet(
     currentTokens: Int,
     dailyBudget: Int,
+    approvedApps: List<ApprovedApp> = emptyList(),
     onConversations: () -> Unit,
     onContacts: () -> Unit,
     onCheckIn: () -> Unit,
@@ -595,6 +611,7 @@ fun NavigationMenuSheet(
     onOpenCalendar: (() -> Unit)? = null,
     /** Non-null only when the weather app is approved by the parent. */
     onOpenWeather: (() -> Unit)? = null,
+    onOpenApp: (String) -> Unit = {},
     onSos: () -> Unit
 ) {
     Column(
@@ -648,6 +665,21 @@ fun NavigationMenuSheet(
         NavItem("Map", onClick = onMap)
         onOpenCalendar?.let { cb -> NavItem("Calendar", onClick = cb) }
         onOpenWeather?.let { cb -> NavItem("Weather", onClick = cb) }
+
+        if (approvedApps.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Apps",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = OnNight.copy(alpha = 0.5f),
+                modifier = Modifier.padding(vertical = 6.dp)
+            )
+            approvedApps.forEach { app ->
+                AppNavItem(app = app, onClick = { onOpenApp(app.packageName) })
+            }
+        }
+
         NavItem("Parent App", onClick = onParentAccess)
 
         // Divider before emergency option
@@ -691,6 +723,60 @@ private fun NavItem(label: String, onClick: () -> Unit) {
             fontWeight = FontWeight.Normal,
             color = OnNight,
             modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun AppNavItem(app: ApprovedApp, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp)
+            .semantics { contentDescription = "Open ${app.appName}" },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(OnNight.copy(alpha = 0.06f)),
+            contentAlignment = Alignment.Center
+        ) {
+            val icon = app.icon
+            if (icon != null) {
+                val bitmap = android.graphics.Bitmap.createBitmap(
+                    icon.intrinsicWidth.coerceAtLeast(1),
+                    icon.intrinsicHeight.coerceAtLeast(1),
+                    android.graphics.Bitmap.Config.ARGB_8888
+                )
+                val canvas = android.graphics.Canvas(bitmap)
+                icon.setBounds(0, 0, canvas.width, canvas.height)
+                icon.draw(canvas)
+                androidx.compose.foundation.Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.size(26.dp)
+                )
+            } else {
+                Text(
+                    text = app.appName.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = OnNight
+                )
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Text(
+            app.appName,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Normal,
+            color = OnNight,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
         )
     }
 }

@@ -2,16 +2,14 @@ package com.wew.launcher.telecom
 
 import android.content.SharedPreferences
 
-/** Normalized numbers (digits + optional leading +) for matching parent + approved contacts. */
+/** Parent + parent-approved contacts for incoming call screening. */
 object WewPhoneAllowlist {
 
     const val PREF_NUMBERS: String = "wew_call_allowlist_normalized"
     const val PREF_INITIALIZED: String = "wew_call_allowlist_initialized"
 
-    fun normalize(phone: String): String =
-        phone.replace(Regex("[^\\d+]"), "").let {
-            if (it.startsWith("+1") && it.length == 12) it.substring(2) else it
-        }
+    /** Kept for dial-string helpers; matches [PhoneMatch.canonicalForAllowlist]. */
+    fun normalize(phone: String): String = PhoneMatch.canonicalForAllowlist(phone)
 
     fun write(prefs: SharedPreferences, numbers: Set<String>) {
         prefs.edit()
@@ -28,6 +26,6 @@ object WewPhoneAllowlist {
         if (!prefs.getBoolean(PREF_INITIALIZED, false)) return true
         if (rawNumber.isNullOrBlank()) return false
         val set = prefs.getStringSet(PREF_NUMBERS, emptySet()) ?: emptySet()
-        return normalize(rawNumber) in set
+        return set.any { allow -> PhoneMatch.sameSubscriber(allow, rawNumber) }
     }
 }

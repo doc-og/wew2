@@ -280,7 +280,10 @@ class ParentRepository {
     // Apps
     suspend fun getInstalledApps(deviceId: String): List<AppInfo> {
         return supabase.postgrest["apps"]
-            .select(Columns.ALL) { filter { eq("device_id", deviceId) } }
+            .select(Columns.ALL) {
+                filter { eq("device_id", deviceId) }
+                order("app_name", Order.ASCENDING)
+            }
             .decodeList()
     }
 

@@ -20,7 +20,10 @@ data class Device(
     @SerialName("parent_display_name") val parentDisplayName: String? = null,
     @SerialName("parent_sms_thread_id") val parentSmsThreadId: String? = null,
     @SerialName("timezone") val timezone: String = "America/Los_Angeles",
-    @SerialName("last_seen_at") val lastSeenAt: String? = null
+    @SerialName("last_seen_at") val lastSeenAt: String? = null,
+    @SerialName("child_default_sms_app") val childDefaultSmsApp: Boolean = false,
+    @SerialName("child_sms_permissions_ok") val childSmsPermissionsOk: Boolean = false,
+    @SerialName("child_messaging_health_at") val childMessagingHealthAt: String? = null
 )
 
 @Serializable

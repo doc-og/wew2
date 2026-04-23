@@ -59,6 +59,7 @@ import com.wew.parent.ui.screen.LoginScreen
 import com.wew.parent.ui.screen.MessagesScreen
 import com.wew.parent.ui.screen.RegisterDeviceScreen
 import com.wew.parent.ui.screen.AccessScheduleScreen
+import com.wew.parent.ui.screen.ChildDevicePermissionsScreen
 import com.wew.parent.ui.screen.SettingsScreen
 import com.wew.parent.ui.screen.UrlApprovalsScreen
 import com.wew.parent.ui.theme.BrandViolet
@@ -70,9 +71,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val setupMode = intent.getBooleanExtra("setup_mode", false)
         setContent {
             WewParentTheme {
-                WewParentApp()
+                WewParentApp(setupMode = setupMode)
             }
         }
     }
@@ -89,8 +91,10 @@ val navItems = listOf(
     NavItem("settings",  "Settings",  Icons.Default.Settings)
 )
 
+private val mainTabRoutes = navItems.map { it.route }.toSet()
+
 @Composable
-fun WewParentApp() {
+fun WewParentApp(setupMode: Boolean = false) {
     val context = LocalContext.current
     val repo = remember { ParentRepository() }
     val scope = rememberCoroutineScope()
@@ -219,12 +223,35 @@ fun WewParentApp() {
 
     if (hasDevice == null) return
 
+    // If launched from the launcher setup flow and this account already has a device,
+    // return the existing device ID immediately so the launcher can link itself.
+    if (setupMode && hasDevice == true && deviceId.isNotEmpty()) {
+        val activity = context as? android.app.Activity
+        if (activity != null) {
+            val result = android.content.Intent().putExtra("device_id", deviceId)
+            activity.setResult(android.app.Activity.RESULT_OK, result)
+            activity.finish()
+            return
+        }
+    }
+
     if (hasDevice == false) {
+        val activity = context as? android.app.Activity
         Box(modifier = touchInterceptModifier.fillMaxSize()) {
-            RegisterDeviceScreen(onDeviceRegistered = {
-                lastInteractionMs = System.currentTimeMillis()
-                refreshCount++
-            })
+            RegisterDeviceScreen(
+                setupMode = setupMode,
+                onDeviceRegistered = { registeredDeviceId ->
+                    if (setupMode && activity != null) {
+                        val result = android.content.Intent()
+                            .putExtra("device_id", registeredDeviceId)
+                        activity.setResult(android.app.Activity.RESULT_OK, result)
+                        activity.finish()
+                    } else {
+                        lastInteractionMs = System.currentTimeMillis()
+                        refreshCount++
+                    }
+                }
+            )
         }
         return
     }
@@ -232,42 +259,47 @@ fun WewParentApp() {
     val navController = rememberNavController()
 
     Box(modifier = touchInterceptModifier.fillMaxSize()) {
+        val navBackStackEntry by navController.currentBackStackEntryAsState()
+        val currentRoute = navBackStackEntry?.destination?.route
+        val showBottomBar = currentRoute in mainTabRoutes
+
         Scaffold(
             bottomBar = {
-                NavigationBar(
-                    containerColor = Color.White,
-                    tonalElevation = 0.dp
-                ) {
-                    val navBackStackEntry by navController.currentBackStackEntryAsState()
-                    val currentDest = navBackStackEntry?.destination
-                    navItems.forEach { item ->
-                        val selected = currentDest?.hierarchy?.any { it.route == item.route } == true
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = {
-                                navController.navigate(item.route) {
-                                    popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
-                            icon = { Icon(item.icon, contentDescription = item.label) },
-                            label = {
-                                Text(
-                                    item.label,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                                    maxLines = 1
+                if (showBottomBar) {
+                    NavigationBar(
+                        containerColor = Color.White,
+                        tonalElevation = 0.dp
+                    ) {
+                        val currentDest = navBackStackEntry?.destination
+                        navItems.forEach { item ->
+                            val selected = currentDest?.hierarchy?.any { it.route == item.route } == true
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = {
+                                    navController.navigate(item.route) {
+                                        popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                },
+                                icon = { Icon(item.icon, contentDescription = item.label) },
+                                label = {
+                                    Text(
+                                        item.label,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                        maxLines = 1
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = BrandViolet,
+                                    selectedTextColor = BrandViolet,
+                                    unselectedIconColor = Color(0xFF9999AA),
+                                    unselectedTextColor = Color(0xFF9999AA),
+                                    indicatorColor = BrandViolet.copy(alpha = 0.1f)
                                 )
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = BrandViolet,
-                                selectedTextColor = BrandViolet,
-                                unselectedIconColor = Color(0xFF9999AA),
-                                unselectedTextColor = Color(0xFF9999AA),
-                                indicatorColor = BrandViolet.copy(alpha = 0.1f)
                             )
-                        )
+                        }
                     }
                 }
             }
@@ -294,7 +326,23 @@ fun WewParentApp() {
                     )
                 }
                 composable("apps") {
-                    if (deviceId.isNotEmpty()) AppsScreen(deviceId = deviceId)
+                    if (deviceId.isNotEmpty()) {
+                        AppsScreen(deviceId = deviceId)
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(ParentBackground),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "No child device linked to this account.",
+                                color = Color(0xFF6B6B8A),
+                                fontSize = 15.sp,
+                                modifier = Modifier.padding(24.dp)
+                            )
+                        }
+                    }
                 }
                 composable("contacts") {
                     if (deviceId.isNotEmpty()) ContactsScreen(deviceId = deviceId)
@@ -313,16 +361,25 @@ fun WewParentApp() {
                             navController.navigate("access_schedule") {
                                 launchSingleTop = true
                             }
+                        },
+                        onOpenChildPermissions = {
+                            navController.navigate("child_permissions") {
+                                launchSingleTop = true
+                            }
                         }
                     )
                 }
                 composable("access_schedule") {
-                    if (deviceId.isNotEmpty()) {
-                        AccessScheduleScreen(
-                            deviceId = deviceId,
-                            onBack = { navController.popBackStack() }
-                        )
-                    }
+                    AccessScheduleScreen(
+                        deviceId = deviceId,
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+                composable("child_permissions") {
+                    ChildDevicePermissionsScreen(
+                        deviceId = deviceId,
+                        onBack = { navController.popBackStack() }
+                    )
                 }
             }
         }

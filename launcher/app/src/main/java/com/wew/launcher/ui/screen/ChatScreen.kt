@@ -1,6 +1,7 @@
 package com.wew.launcher.ui.screen
 
 import android.app.Application
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -15,15 +16,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +42,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,12 +50,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -78,6 +86,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.wew.launcher.data.model.WewContact
+import com.wew.launcher.data.model.composedDisplayName
+import com.wew.launcher.data.model.matchesContactSearch
 import com.wew.launcher.sms.SmsDirection
 import com.wew.launcher.sms.SmsMessage
 import com.wew.launcher.token.TokenEngine
@@ -88,8 +98,10 @@ import com.wew.launcher.ui.theme.WarningAmber
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.ui.viewmodel.ChatBubbleItem
 import com.wew.launcher.telecom.CallParticipant
+import com.wew.launcher.telecom.PhoneMatch
 import com.wew.launcher.telecom.WewCallManager
 import com.wew.launcher.ui.viewmodel.ChatViewModel
+import com.wew.launcher.ui.viewmodel.ConversationListUiState
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -98,6 +110,27 @@ import java.util.Locale
 
 private val URL_REGEX = Regex("""https?://[^\s<>"]+""")
 
+private fun dedupeContactsByPhone(contacts: List<WewContact>): List<WewContact> {
+    val out = mutableListOf<WewContact>()
+    for (c in contacts) {
+        val p = c.phone?.trim().orEmpty()
+        if (p.isEmpty()) continue
+        if (out.none { PhoneMatch.sameSubscriber(it.phone, p) }) out.add(c)
+    }
+    return out
+}
+
+/**
+ * Recipient pool for new-message compose. Every approved contact is eligible —
+ * including the parent, so the child can always reach them via compose in
+ * addition to the pinned "WeW Parent" thread on the conversation list.
+ */
+@Suppress("UNUSED_PARAMETER")
+private fun buildNewComposeRecipientPool(
+    context: Context,
+    ui: ConversationListUiState
+): List<WewContact> = dedupeContactsByPhone(ui.approvedContacts)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -105,25 +138,48 @@ fun ChatScreen(
     recipientAddress: String,
     displayName: String,
     mergeSystemSummaries: Boolean,
-    initialRecipients: List<WewContact> = emptyList(),
-    approvedContacts: List<WewContact> = emptyList(),
+    composeSession: Int = 0,
+    conversationListViewModel: ConversationListViewModel? = null,
     onBack: () -> Unit,
     onOpenUrl: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val isNewCompose = threadId == -1L
+    val staticListUi = remember { mutableStateOf(ConversationListUiState()) }
+    val listUiState by if (isNewCompose && conversationListViewModel != null) {
+        conversationListViewModel.uiState.collectAsState()
+    } else {
+        staticListUi
+    }
+    val recipientPool = remember(
+        isNewCompose,
+        conversationListViewModel,
+        listUiState.parentPhoneNumber,
+        listUiState.approvedContacts
+    ) {
+        if (!isNewCompose || conversationListViewModel == null) emptyList()
+        else buildNewComposeRecipientPool(context, listUiState)
+    }
+
     val vm: ChatViewModel = viewModel(
-        key = "chat_${threadId}_${recipientAddress}_${initialRecipients.size}",
+        key = if (isNewCompose) "chat_compose_$composeSession" else "chat_${threadId}_$recipientAddress",
         factory = ChatViewModel.factory(
             app = context.applicationContext as Application,
             threadId = threadId,
             recipientAddress = recipientAddress,
             recipientName = displayName,
             mergeSystemSummaries = mergeSystemSummaries,
-            initialRecipients = initialRecipients
+            initialRecipients = emptyList()
         )
     )
     val state by vm.uiState.collectAsState()
     val listState = rememberLazyListState()
+
+    LaunchedEffect(isNewCompose, conversationListViewModel) {
+        if (isNewCompose && conversationListViewModel != null) {
+            conversationListViewModel.load()
+        }
+    }
 
     // Photo picker — launched when user taps the attach button
     val photoPicker = rememberLauncherForActivityResult(
@@ -147,8 +203,6 @@ fun ChatScreen(
             listState.scrollToItem(state.chatItems.lastIndex)
         }
     }
-
-    var showRecipientPicker by remember { mutableStateOf(false) }
 
     // Place call in-app (self-managed telecom — no system dialer)
     LaunchedEffect(state.pendingCall) {
@@ -203,18 +257,54 @@ fun ChatScreen(
             .background(Night)
             .statusBarsPadding()
     ) {
-        ChatTopBar(
-            displayName = state.recipientName.ifBlank { displayName },
-            onBack = onBack,
-            onCall = vm::onCallClick,
-            callEnabled = state.recipientAddress.isNotBlank()
-        )
-
-        if (approvedContacts.isNotEmpty()) {
-            RecipientStrip(
-                selected = state.selectedRecipients,
-                onAddClick = { showRecipientPicker = true }
+        if (!isNewCompose) {
+            ChatTopBar(
+                displayName = state.recipientName.ifBlank { displayName },
+                onBack = onBack,
+                onCall = vm::onCallClick,
+                callEnabled = state.recipientAddress.isNotBlank()
             )
+        }
+
+        if (isNewCompose && conversationListViewModel != null) {
+            when {
+                listUiState.isLoading && recipientPool.isEmpty() -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = BrandViolet,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = "loading contacts…",
+                            fontSize = 14.sp,
+                            color = OnNight.copy(alpha = 0.55f)
+                        )
+                    }
+                }
+                recipientPool.isEmpty() -> {
+                    Text(
+                        text = "no approved contacts yet. your parent can add people in WeW Parent.",
+                        fontSize = 14.sp,
+                        color = OnNight.copy(alpha = 0.55f),
+                        lineHeight = 20.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+                else -> {
+                    NewComposeRecipientMultiselect(
+                        pool = recipientPool,
+                        selected = state.selectedRecipients,
+                        onSelectionChange = vm::setRecipients
+                    )
+                }
+            }
         }
 
         HorizontalDivider(color = OnNight.copy(alpha = 0.08f), thickness = 1.dp)
@@ -236,10 +326,14 @@ fun ChatScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (state.selectedRecipients.isEmpty() && approvedContacts.isNotEmpty()) {
-                        "add people above, then say hi!"
-                    } else {
-                        "no messages yet — say hi!"
+                    text = when {
+                        isNewCompose &&
+                            conversationListViewModel != null &&
+                            recipientPool.isNotEmpty() &&
+                            state.selectedRecipients.isEmpty() -> {
+                            "search for someone above, then say hi!"
+                        }
+                        else -> "no messages yet — say hi!"
                     },
                     fontSize = 15.sp,
                     color = OnNight.copy(alpha = 0.4f)
@@ -272,128 +366,168 @@ fun ChatScreen(
             onAttach = { photoPicker.launch("image/*") },
             isSending = state.isSending,
             tokensExhausted = state.tokensExhausted,
+            sendError = state.sendError,
             attachedImageUri = state.attachedImageUri,
             onClearAttachment = vm::clearAttachment,
             isMms = state.attachedImageUri != null,
             sendEnabled = state.selectedRecipients.isNotEmpty() || state.recipientAddress.isNotBlank()
         )
     }
-
-    if (showRecipientPicker && approvedContacts.isNotEmpty()) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = { showRecipientPicker = false },
-            sheetState = sheetState,
-            containerColor = Color(0xFF13131F)
-        ) {
-            RecipientPickerSheet(
-                approvedContacts = approvedContacts,
-                initiallySelected = state.selectedRecipients,
-                onDone = { picked ->
-                    vm.setRecipients(picked)
-                    showRecipientPicker = false
-                }
-            )
-        }
-    }
 }
 
 @Composable
-private fun RecipientStrip(
+private fun chatFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = BrandViolet,
+    unfocusedBorderColor = OnNight.copy(alpha = 0.15f),
+    focusedTextColor = OnNight,
+    unfocusedTextColor = OnNight,
+    focusedLabelColor = OnNight.copy(alpha = 0.65f),
+    unfocusedLabelColor = OnNight.copy(alpha = 0.45f),
+    cursorColor = BrandViolet,
+    focusedContainerColor = Color(0xFF1E1E2E),
+    unfocusedContainerColor = Color(0xFF1E1E2E)
+)
+
+@Composable
+private fun NewComposeRecipientMultiselect(
+    pool: List<WewContact>,
     selected: List<WewContact>,
-    onAddClick: () -> Unit
+    onSelectionChange: (List<WewContact>) -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            "to:",
-            fontSize = 13.sp,
-            color = OnNight.copy(alpha = 0.5f),
-            modifier = Modifier.padding(end = 8.dp)
-        )
-        Row(modifier = Modifier.weight(1f)) {
-            if (selected.isEmpty()) {
-                Text(
-                    "tap to add people",
-                    color = BrandViolet,
-                    fontSize = 14.sp,
-                    modifier = Modifier.clickable(onClick = onAddClick)
-                )
-            } else {
-                Text(
-                    selected.joinToString { it.name } + " · ",
-                    fontSize = 14.sp,
-                    color = OnNight,
-                    maxLines = 1
-                )
-                Text(
-                    "edit",
-                    color = BrandViolet,
-                    fontSize = 14.sp,
-                    modifier = Modifier.clickable(onClick = onAddClick)
-                )
+    var query by remember { mutableStateOf("") }
+    val qTrim = query.trim()
+    val filtered = remember(pool, qTrim, selected) {
+        if (qTrim.isEmpty()) {
+            emptyList()
+        } else {
+            pool.filter { candidate ->
+                candidate.matchesContactSearch(qTrim) &&
+                    selected.none { PhoneMatch.sameSubscriber(it.phone, candidate.phone) }
             }
         }
     }
-}
-
-@Composable
-private fun RecipientPickerSheet(
-    approvedContacts: List<WewContact>,
-    initiallySelected: List<WewContact>,
-    onDone: (List<WewContact>) -> Unit
-) {
-    fun contactKey(c: WewContact): String = c.id ?: c.phone.orEmpty()
-    var pickedKeys by remember {
-        mutableStateOf(initiallySelected.map(::contactKey).filter { it.isNotEmpty() }.toSet())
-    }
-    Column(Modifier.padding(20.dp)) {
-        Text("choose people", fontSize = 18.sp, fontWeight = FontWeight.Medium, color = OnNight)
-        Spacer(Modifier.height(12.dp))
-        LazyColumn {
-            items(approvedContacts, key = { contactKey(it) }) { c ->
-                val key = contactKey(c)
-                if (key.isEmpty()) return@items
-                val on = key in pickedKeys
-                Row(
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 12.dp)
+    ) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = {
+                Text(
+                    "search name, nickname, number, relationship…",
+                    color = OnNight.copy(alpha = 0.35f),
+                    fontSize = 14.sp
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = null,
+                    tint = OnNight.copy(alpha = 0.45f)
+                )
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            colors = chatFieldColors(),
+            textStyle = TextStyle(fontSize = 15.sp, color = OnNight)
+        )
+        if (selected.isNotEmpty()) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 4.dp)
+            ) {
+                items(
+                    items = selected,
+                    key = { c -> c.id ?: c.phone.orEmpty() }
+                ) { c ->
+                    InputChip(
+                        selected = true,
+                        onClick = {
+                            onSelectionChange(
+                                selected.filterNot { PhoneMatch.sameSubscriber(it.phone, c.phone) }
+                            )
+                        },
+                        label = {
+                            Text(
+                                c.composedDisplayName(),
+                                maxLines = 1,
+                                fontSize = 13.sp
+                            )
+                        }
+                    )
+                }
+            }
+        }
+        if (filtered.isEmpty()) {
+            if (qTrim.isNotEmpty()) {
+                Text(
+                    "no matches",
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
+                    color = OnNight.copy(alpha = 0.45f),
+                    fontSize = 14.sp
+                )
+            }
+        } else {
+            Spacer(Modifier.height(6.dp))
+            Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            pickedKeys =
-                                if (key in pickedKeys) pickedKeys - key else pickedKeys + key
-                        }
-                        .padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .heightIn(max = 288.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF1A1A28),
+                    tonalElevation = 4.dp,
+                    shadowElevation = 6.dp
                 ) {
-                    Text(
-                        text = if (on) "●" else "○",
-                        color = if (on) BrandViolet else OnNight.copy(alpha = 0.4f),
-                        modifier = Modifier.width(28.dp),
-                        fontSize = 14.sp
-                    )
-                    Column {
-                        Text(c.name, color = OnNight, fontSize = 16.sp)
-                        c.phone?.let { Text(it, fontSize = 13.sp, color = OnNight.copy(alpha = 0.5f)) }
+                    LazyColumn {
+                        itemsIndexed(
+                            items = filtered,
+                            key = { _, c -> c.id ?: c.phone.orEmpty() }
+                        ) { index, c ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onSelectionChange(dedupeContactsByPhone(selected + c))
+                                        query = ""
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                            ) {
+                                Text(
+                                    c.composedDisplayName(),
+                                    color = OnNight,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                val detail = buildList {
+                                    c.phone?.takeIf { it.isNotBlank() }?.let { add(it) }
+                                    c.relationship?.takeIf { it.isNotBlank() }?.let { add(it) }
+                                    c.nickname?.takeIf { it.isNotBlank() }?.let { add(it) }
+                                }.joinToString(" · ")
+                                if (detail.isNotEmpty()) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        detail,
+                                        color = OnNight.copy(alpha = 0.55f),
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+                            if (index < filtered.lastIndex) {
+                                HorizontalDivider(
+                                    color = OnNight.copy(alpha = 0.06f),
+                                    thickness = 1.dp
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
-        Spacer(Modifier.height(16.dp))
-        TextButton(
-            onClick = {
-                val list = approvedContacts.filter { contactKey(it) in pickedKeys }
-                onDone(list)
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("done", color = BrandViolet)
-        }
     }
-}
 
 @Composable
 private fun SystemMessageBubble(body: String) {
@@ -658,6 +792,7 @@ private fun InputBar(
     onAttach: () -> Unit,
     isSending: Boolean,
     tokensExhausted: Boolean,
+    sendError: String?,
     attachedImageUri: String?,
     onClearAttachment: () -> Unit,
     isMms: Boolean,
@@ -669,7 +804,15 @@ private fun InputBar(
     ).toString()
     val context = LocalContext.current
 
-    Column(modifier = Modifier.imePadding().navigationBarsPadding()) {
+    // Use the union of IME and nav-bar insets so we pin the bar to whichever
+    // is taller. When the keyboard is closed, nav-bar padding applies; when it
+    // is open, the IME inset already covers the nav bar, so we don't stack
+    // both and leave a gap between the bar and the keyboard.
+    Column(
+        modifier = Modifier.windowInsetsPadding(
+            WindowInsets.ime.union(WindowInsets.navigationBars)
+        )
+    ) {
         if (tokensExhausted) {
             Text(
                 text = "tokens exhausted — can't send",
@@ -679,6 +822,18 @@ private fun InputBar(
                     .fillMaxWidth()
                     .background(Night)
                     .padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+        }
+        sendError?.let { err ->
+            Text(
+                text = err,
+                fontSize = 12.sp,
+                color = WarningAmber,
+                lineHeight = 16.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Night)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
 

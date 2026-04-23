@@ -10,15 +10,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -28,21 +28,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.ui.theme.BrandViolet
 import com.wew.launcher.ui.theme.ElectricViolet
 import com.wew.launcher.ui.theme.Night
 import com.wew.launcher.ui.theme.OnNight
+import kotlinx.coroutines.launch
 
 /**
- * Full-screen lock shown when the access schedule blocks phone use.
- *
- * @param unlockTime Display string for when the phone next becomes available (e.g. "7:00 AM").
- * @param onPasscodeUnlock Called when the parent enters the correct passcode — dismisses the lock
- *                         for the remainder of the session (does not persist).
+ * Full-screen lock when schedule rules block phone use. Parent PIN is required to unlock;
+ * there is no bypass if no PIN is configured on the device.
  */
 @Composable
 fun ScheduleLockScreen(
@@ -50,8 +50,36 @@ fun ScheduleLockScreen(
     deviceId: String,
     onPasscodeUnlock: () -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    var passcodeConfigured by remember { mutableStateOf<Boolean?>(null) }
     var showPasscode by remember { mutableStateOf(false) }
+    var attemptsLeft by remember { mutableIntStateOf(3) }
+
+    LaunchedEffect(deviceId) {
+        if (deviceId.isBlank()) {
+            passcodeConfigured = false
+            return@LaunchedEffect
+        }
+        val record = runCatching {
+            DeviceRepository(context).getDevicePasscode(deviceId)
+        }.getOrNull()
+        passcodeConfigured = record != null
+        showPasscode = record != null
+    }
+
+    if (passcodeConfigured == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Night),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = BrandViolet)
+        }
+        return
+    }
 
     Box(
         modifier = Modifier
@@ -68,7 +96,6 @@ fun ScheduleLockScreen(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(horizontal = 40.dp)
         ) {
-            // Lock icon
             Box(
                 modifier = Modifier
                     .size(88.dp)
@@ -97,92 +124,70 @@ fun ScheduleLockScreen(
             Spacer(Modifier.height(10.dp))
 
             Text(
-                text = if (unlockTime.isNotBlank())
-                    "available again at $unlockTime"
-                else
-                    "check back later",
+                text = when {
+                    unlockTime.isNotBlank() -> "available again at $unlockTime"
+                    else -> "outside allowed hours — enter your parent’s code to use the phone"
+                },
                 fontSize = 16.sp,
                 color = OnNight.copy(alpha = 0.55f),
                 textAlign = TextAlign.Center
             )
 
-            Spacer(Modifier.height(48.dp))
-
-            // Parent override — subtle, not prominent
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color.White.copy(alpha = 0.06f),
-                modifier = Modifier.clip(RoundedCornerShape(14.dp))
-            ) {
-                TextButton(
-                    onClick = { showPasscode = true },
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                ) {
+            if (passcodeConfigured == true && !showPasscode) {
+                Spacer(Modifier.height(32.dp))
+                androidx.compose.material3.TextButton(onClick = { showPasscode = true }) {
                     Text(
-                        text = "parent override",
-                        fontSize = 14.sp,
-                        color = OnNight.copy(alpha = 0.45f)
+                        "enter parent code",
+                        color = ElectricViolet,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium
                     )
                 }
+            }
+
+            if (passcodeConfigured == false) {
+                Spacer(Modifier.height(28.dp))
+                Text(
+                    text = "your parent must set a child passcode in WeW Parent → Settings → Child passcode before you can unlock here.",
+                    fontSize = 14.sp,
+                    color = OnNight.copy(alpha = 0.45f),
+                    textAlign = TextAlign.Center,
+                    lineHeight = 20.sp
+                )
             }
         }
     }
 
-    if (showPasscode) {
+    if (showPasscode && passcodeConfigured == true) {
         PasscodeDialog(
-            deviceId = deviceId,
-            onSuccess = {
-                showPasscode = false
-                onPasscodeUnlock()
+            appName = "parent code",
+            attemptsLeft = attemptsLeft,
+            onPinSubmit = { pin ->
+                scope.launch {
+                    val repo = DeviceRepository(context)
+                    val record = repo.getDevicePasscode(deviceId) ?: return@launch
+                    val input = deviceId + pin
+                    val bytes = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(input.toByteArray(Charsets.UTF_8))
+                    val hash = bytes.joinToString("") { "%02x".format(it) }
+                    if (hash == record.passcodeHash) {
+                        showPasscode = false
+                        onPasscodeUnlock()
+                    } else {
+                        val remaining = attemptsLeft - 1
+                        if (remaining <= 0) {
+                            showPasscode = false
+                            attemptsLeft = 3
+                        } else {
+                            attemptsLeft = remaining
+                        }
+                    }
+                }
             },
-            onDismiss = { showPasscode = false }
+            onDismiss = {
+                showPasscode = false
+                attemptsLeft = 3
+            }
         )
     }
-}
-
-/**
- * Computes the next unlock time string from a list of AccessScheduleDay rows.
- * Returns e.g. "7:00 AM" for the next day's allowed_start, or "" if unknown.
- */
-fun nextUnlockTimeString(
-    days: List<com.wew.launcher.data.model.AccessScheduleDay>,
-    todayDow: Int,
-    nowMinutes: Int  // minutes since midnight
-): String {
-    // Check if today's window starts later today
-    val today = days.firstOrNull { it.dayOfWeek == todayDow }
-    if (today != null && today.isEnabled) {
-        val startMinutes = timeStringToMinutes(today.allowedStart)
-        if (startMinutes > nowMinutes) {
-            return formatMinutes(startMinutes)
-        }
-    }
-
-    // Look ahead through the next 7 days
-    for (offset in 1..7) {
-        val dow = (todayDow + offset) % 7
-        val day = days.firstOrNull { it.dayOfWeek == dow }
-        if (day != null && day.isEnabled) {
-            return formatMinutes(timeStringToMinutes(day.allowedStart))
-        }
-    }
-
-    return ""
-}
-
-private fun timeStringToMinutes(hhmmss: String): Int {
-    val parts = hhmmss.split(":").map { it.toIntOrNull() ?: 0 }
-    return (parts.getOrElse(0) { 0 }) * 60 + (parts.getOrElse(1) { 0 })
-}
-
-private fun formatMinutes(totalMinutes: Int): String {
-    val hour = totalMinutes / 60
-    val minute = totalMinutes % 60
-    val amPm = if (hour < 12) "AM" else "PM"
-    val displayHour = when {
-        hour == 0 -> 12
-        hour > 12 -> hour - 12
-        else -> hour
-    }
-    return if (minute == 0) "$displayHour $amPm" else "%d:%02d %s".format(displayHour, minute, amPm)
 }

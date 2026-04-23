@@ -8,13 +8,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.wew.launcher.data.model.ActionType
+import com.wew.launcher.data.model.composedDisplayName
 import com.wew.launcher.data.repository.DeviceRepository
+import com.wew.launcher.sms.MessagingCapability
+import com.wew.launcher.sms.SmsDirection
 import com.wew.launcher.sms.SmsMessage
 import com.wew.launcher.sms.SmsRepository
+import com.wew.launcher.sms.smsSendPreconditionMessage
+import com.wew.launcher.sms.userMessageForSmsSendFailure
 import com.wew.launcher.token.TokenEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.OffsetDateTime
@@ -64,7 +71,9 @@ data class ChatUiState(
     /** MIME type of [attachedImageUri], resolved at attach time. */
     val attachedImageMime: String = "image/jpeg",
     /** URI to display in the full-screen image viewer; null = viewer closed. */
-    val fullScreenImageUri: String? = null
+    val fullScreenImageUri: String? = null,
+    /** Shown above the composer when sending fails or setup is incomplete. */
+    val sendError: String? = null
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -85,10 +94,24 @@ class ChatViewModel(
     /** Mutable so we can update after sending the first message of a new thread. */
     private var currentThreadId: Long = initialThreadId
 
+    private val composeMode: Boolean = initialThreadId == -1L
+
+    private var recipientBindJob: Job? = null
+
     private val _uiState = MutableStateFlow(
         ChatUiState(
-            recipientName = recipientName,
-            recipientAddress = recipientAddress,
+            recipientName = when {
+                initialRecipients.size == 1 ->
+                    initialRecipients.first().composedDisplayName().ifBlank { recipientName }
+                initialRecipients.size > 1 -> "${initialRecipients.size} people"
+                else -> recipientName
+            },
+            recipientAddress = when {
+                initialRecipients.size == 1 ->
+                    initialRecipients.first().phone?.trim().orEmpty()
+                        .ifEmpty { recipientAddress }
+                else -> recipientAddress
+            },
             selectedRecipients = initialRecipients
         )
     )
@@ -97,6 +120,11 @@ class ChatViewModel(
     init {
         load()
         observeLive()
+    }
+
+    override fun onCleared() {
+        recipientBindJob?.cancel()
+        super.onCleared()
     }
 
     private fun parseCreatedAt(iso: String): Long {
@@ -136,6 +164,7 @@ class ChatViewModel(
     fun load() {
         val deviceId = prefs.getString("device_id", null) ?: return
         viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
             runCatching {
                 val items = buildChatItems(deviceId)
                 val device = repo.getDevice(deviceId)
@@ -160,8 +189,22 @@ class ChatViewModel(
     private fun observeLive() {
         viewModelScope.launch {
             smsRepo.observeSmsChanges().collect {
-                if (currentThreadId == -1L) return@collect
                 val deviceId = prefs.getString("device_id", null) ?: return@collect
+                if (currentThreadId == -1L) {
+                    if (!composeMode) return@collect
+                    val phone = _uiState.value.selectedRecipients.firstOrNull()?.phone?.trim().orEmpty()
+                        .ifEmpty { _uiState.value.recipientAddress.trim() }
+                    if (phone.isEmpty()) return@collect
+                    runCatching {
+                        val tid = smsRepo.resolveThreadIdForContact(phone)
+                        if (tid != -1L) {
+                            currentThreadId = tid
+                            val items = buildChatItems(deviceId)
+                            _uiState.update { s -> s.copy(chatItems = items) }
+                        }
+                    }.onFailure { Log.w("ChatVM", "compose live bind failed: ${it.message}") }
+                    return@collect
+                }
                 runCatching {
                     val items = buildChatItems(deviceId)
                     _uiState.update { s -> s.copy(chatItems = items) }
@@ -173,24 +216,49 @@ class ChatViewModel(
     // ── Recipients (group compose) ────────────────────────────────────────────
 
     fun setRecipients(contacts: List<com.wew.launcher.data.model.WewContact>) {
+        recipientBindJob?.cancel()
+        if (contacts.isEmpty()) {
+            if (composeMode) {
+                currentThreadId = -1L
+                _uiState.update {
+                    it.copy(
+                        selectedRecipients = emptyList(),
+                        recipientAddress = "",
+                        recipientName = ""
+                    )
+                }
+                load()
+            }
+            return
+        }
+        val primary = contacts.first()
         _uiState.update { st ->
-            val primary = contacts.firstOrNull()
             st.copy(
                 selectedRecipients = contacts,
-                recipientAddress = primary?.phone?.trim().orEmpty(),
+                recipientAddress = primary.phone?.trim().orEmpty(),
                 recipientName = when {
                     contacts.size > 1 -> "${contacts.size} people"
-                    primary != null -> primary.name
-                    else -> ""
+                    else -> primary.composedDisplayName().ifBlank { primary.name }
                 }
             )
+        }
+        if (!composeMode) return
+        recipientBindJob = viewModelScope.launch {
+            val tid = if (contacts.size == 1) {
+                val phone = contacts.first().phone?.trim().orEmpty()
+                if (phone.isEmpty()) -1L else smsRepo.resolveThreadIdForContact(phone)
+            } else {
+                -1L
+            }
+            currentThreadId = tid
+            load()
         }
     }
 
     // ── Input ─────────────────────────────────────────────────────────────────
 
     fun onInputChange(text: String) {
-        _uiState.update { it.copy(inputText = text) }
+        _uiState.update { it.copy(inputText = text, sendError = null) }
     }
 
     // ── Send ──────────────────────────────────────────────────────────────────
@@ -209,6 +277,11 @@ class ChatViewModel(
         }
         if (targets.isEmpty()) return
 
+        if (!MessagingCapability.canSendAndReceiveSms(getApplication())) {
+            _uiState.update { it.copy(sendError = smsSendPreconditionMessage()) }
+            return
+        }
+
         val isMms = hasImage
         val perMsgCost = TokenEngine.calculateCost(
             if (isMms) ActionType.MMS_SENT else ActionType.SMS_SENT
@@ -223,9 +296,12 @@ class ChatViewModel(
         val stagedAttach = state.attachedImageUri
         val stagedMime = state.attachedImageMime
 
-        _uiState.update { it.copy(isSending = true, inputText = "", attachedImageUri = null) }
+        _uiState.update {
+            it.copy(isSending = true, inputText = "", attachedImageUri = null, sendError = null)
+        }
 
         viewModelScope.launch {
+            var sendFailed: String? = null
             for (to in targets) {
                 val tokenResult = repo.consumeTokens(
                     deviceId = deviceId,
@@ -245,7 +321,7 @@ class ChatViewModel(
                     }
                     return@launch
                 }
-                if (isMms) {
+                val sendResult = if (isMms) {
                     smsRepo.sendMms(
                         to = to,
                         body = text,
@@ -255,21 +331,85 @@ class ChatViewModel(
                 } else {
                     smsRepo.sendSms(to = to, body = text)
                 }
+                if (sendResult.isFailure) {
+                    repo.addTokens(deviceId, perMsgCost, "sms_send_failed_refund")
+                    sendFailed = userMessageForSmsSendFailure(
+                        sendResult.exceptionOrNull() ?: IllegalStateException("send failed")
+                    )
+                    break
+                }
             }
 
+            if (sendFailed != null) {
+                _uiState.update {
+                    it.copy(
+                        isSending = false,
+                        inputText = text,
+                        attachedImageUri = stagedAttach,
+                        sendError = sendFailed
+                    )
+                }
+                return@launch
+            }
+
+            // Outgoing rows and thread_id are written asynchronously by the telephony stack.
+            // Resolve thread with the same heuristics as the conversation list, then poll briefly.
+            delay(80)
             if (currentThreadId == -1L && targets.isNotEmpty()) {
-                currentThreadId = smsRepo.getThreadIdForAddress(targets.first())
+                val targetPhone = targets.first()
+                repeat(24) {
+                    val tid = smsRepo.resolveThreadIdForContact(targetPhone)
+                    if (tid != -1L) {
+                        currentThreadId = tid
+                        return@repeat
+                    }
+                    delay(75)
+                }
+                if (currentThreadId == -1L) {
+                    Log.w("ChatVM", "no thread id after send; SMS DB may lag or app is not default SMS")
+                }
             }
 
             runCatching {
-                val items = buildChatItems(deviceId)
+                var items = buildChatItems(deviceId)
+                if (currentThreadId != -1L && !isMms && text.isNotEmpty()) {
+                    var foundOutgoing = items.filterIsInstance<ChatBubbleItem.Local>().any { row ->
+                        row.message.direction == SmsDirection.OUTGOING && row.message.body == text
+                    }
+                    repeat(10) { attempt ->
+                        if (foundOutgoing) return@repeat
+                        delay(100)
+                        items = buildChatItems(deviceId)
+                        foundOutgoing = items.filterIsInstance<ChatBubbleItem.Local>().any { row ->
+                            row.message.direction == SmsDirection.OUTGOING && row.message.body == text
+                        }
+                        if (attempt == 9 && !foundOutgoing) {
+                            items = buildChatItems(deviceId)
+                        }
+                    }
+                } else {
+                    repeat(3) { n ->
+                        if (n > 0) delay(120)
+                        items = buildChatItems(deviceId)
+                    }
+                }
                 val device = repo.getDevice(deviceId)
+                val missingLocalEcho = composeMode && currentThreadId == -1L && text.isNotEmpty() && !isMms &&
+                    items.filterIsInstance<ChatBubbleItem.Local>().none { row ->
+                        row.message.direction == SmsDirection.OUTGOING && row.message.body == text
+                    }
+                val echoHint = if (missingLocalEcho) {
+                    "Your message may still be sending. If it never shows up, open WeW's permission screen and make sure WeW is the default SMS app."
+                } else {
+                    null
+                }
                 _uiState.update {
                     it.copy(
                         chatItems = items,
                         isSending = false,
                         currentTokens = device.currentTokens,
-                        tokensExhausted = device.currentTokens <= 0
+                        tokensExhausted = device.currentTokens <= 0,
+                        sendError = echoHint
                     )
                 }
             }.onFailure {
@@ -284,7 +424,7 @@ class ChatViewModel(
         _uiState.update { it.copy(attachedImageUri = uri, attachedImageMime = mimeType) }
 
     fun clearAttachment() =
-        _uiState.update { it.copy(attachedImageUri = null) }
+        _uiState.update { it.copy(attachedImageUri = null, sendError = null) }
 
     // ── Full-screen viewer ────────────────────────────────────────────────────
 

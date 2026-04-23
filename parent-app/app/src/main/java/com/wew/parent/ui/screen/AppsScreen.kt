@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -51,6 +52,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -72,6 +74,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsOff
 import com.wew.parent.data.model.AppInfo
 import com.wew.parent.data.repository.ParentRepository
+import com.wew.parent.util.toUserMessage
 import com.wew.parent.ui.theme.BrandViolet
 import com.wew.parent.ui.theme.ElectricViolet
 import com.wew.parent.ui.theme.EmergencyRed
@@ -100,14 +103,23 @@ fun AppsScreen(deviceId: String) {
 
     var apps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    var refreshNonce by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     var activeFilter by remember { mutableStateOf(AppFilter.ALL) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(deviceId) {
-        isLoading = true
-        apps = runCatching { repo.getInstalledApps(deviceId) }.getOrDefault(emptyList())
+    LaunchedEffect(deviceId, refreshNonce) {
+        if (refreshNonce == 0) isLoading = true else isRefreshing = true
+        loadError = null
+        val result = runCatching { repo.getInstalledApps(deviceId) }
+        apps = result.getOrDefault(emptyList())
+        loadError = result.exceptionOrNull()?.toUserMessage(
+            "Couldn't load apps. Check your connection, open WeW on your child's phone, then tap refresh."
+        )
         isLoading = false
+        isRefreshing = false
     }
 
     val sorted = apps.sortedWith(
@@ -142,6 +154,8 @@ fun AppsScreen(deviceId: String) {
             AppsHeroCard(
                 totalApps = apps.size,
                 allowedCount = allowedCount,
+                isRefreshing = isRefreshing,
+                onRefreshClick = { refreshNonce++ },
                 onAddClick = { showAddDialog = true }
             )
         }
@@ -187,8 +201,23 @@ fun AppsScreen(deviceId: String) {
                 }
             }
 
+            apps.isEmpty() && loadError != null -> {
+                item {
+                    AppsLoadErrorCard(
+                        message = loadError!!,
+                        isRefreshing = isRefreshing,
+                        onRetry = { refreshNonce++ }
+                    )
+                }
+            }
+
             apps.isEmpty() -> {
-                item { EmptyDeviceState() }
+                item {
+                    EmptyDeviceState(
+                        onRefresh = { refreshNonce++ },
+                        isRefreshing = isRefreshing
+                    )
+                }
             }
 
             filtered.isEmpty() -> {
@@ -265,6 +294,8 @@ fun AppsScreen(deviceId: String) {
 private fun AppsHeroCard(
     totalApps: Int,
     allowedCount: Int,
+    isRefreshing: Boolean,
+    onRefreshClick: () -> Unit,
     onAddClick: () -> Unit
 ) {
     Box(
@@ -278,22 +309,50 @@ private fun AppsHeroCard(
             .padding(horizontal = 20.dp)
             .padding(top = 24.dp, bottom = 28.dp)
     ) {
-        // Add button — 48dp touch target top-right
-        IconButton(
-            onClick = onAddClick,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.18f))
-                .semantics { contentDescription = "Add app manually" }
+        Row(
+            modifier = Modifier.align(Alignment.TopEnd),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(22.dp)
-            )
+            IconButton(
+                onClick = onRefreshClick,
+                enabled = !isRefreshing,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.18f))
+                    .semantics { contentDescription = "Refresh app list from child device" }
+            ) {
+                if (isRefreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+            IconButton(
+                onClick = onAddClick,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.18f))
+                    .semantics { contentDescription = "Add app manually" }
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
         }
 
         Column {
@@ -724,7 +783,61 @@ private fun AppRow(
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun EmptyDeviceState() {
+private fun AppsLoadErrorCard(
+    message: String,
+    isRefreshing: Boolean,
+    onRetry: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Can't load app list",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF1A1A2E),
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = message,
+                fontSize = 14.sp,
+                color = Color(0xFF6B6B8A),
+                textAlign = TextAlign.Center,
+                lineHeight = 21.sp
+            )
+            Spacer(Modifier.height(16.dp))
+            TextButton(onClick = onRetry, enabled = !isRefreshing) {
+                if (isRefreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = BrandViolet,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Try again", fontWeight = FontWeight.SemiBold, color = BrandViolet)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyDeviceState(
+    onRefresh: () -> Unit,
+    isRefreshing: Boolean
+) {
     Card(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -763,12 +876,27 @@ private fun EmptyDeviceState() {
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "Install the WeW Child app on your child's device and open it once — all installed apps will sync here automatically.",
+                text = "WeW on your child's phone uploads the full app list when they use it and while it runs in the background. Open WeW on their phone, give it a moment, then tap refresh above or the ↻ button on the purple header.",
                 fontSize = 14.sp,
                 color = Color(0xFF6B6B8A),
                 textAlign = TextAlign.Center,
                 lineHeight = 21.sp
             )
+            Spacer(Modifier.height(16.dp))
+            TextButton(
+                onClick = onRefresh,
+                enabled = !isRefreshing
+            ) {
+                if (isRefreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = BrandViolet,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Refresh now", fontWeight = FontWeight.SemiBold, color = BrandViolet)
+                }
+            }
         }
     }
 }

@@ -9,6 +9,7 @@ import android.os.Looper
 import android.provider.Telephony
 import android.telephony.SmsManager
 import android.util.Log
+import com.wew.launcher.telecom.PhoneMatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -221,9 +222,15 @@ class SmsRepository(private val context: Context) {
 
     /**
      * Send a plain SMS. No token deduction here — caller (ViewModel) handles that.
+     *
+     * [SmsManager.sendTextMessage] transmits the message but does NOT write a row
+     * to the SMS content provider — that's the default SMS app's responsibility.
+     * After a successful dispatch we insert the outgoing row into
+     * `content://sms/sent` so our chat view (and any other SMS reader on the
+     * device) sees the sent message.
      */
     @Suppress("DEPRECATION")
-    fun sendSms(to: String, body: String) {
+    fun sendSms(to: String, body: String): Result<Unit> =
         runCatching {
             val smsManager = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                 context.getSystemService(SmsManager::class.java)
@@ -236,7 +243,32 @@ class SmsRepository(private val context: Context) {
             } else {
                 smsManager.sendMultipartTextMessage(to, null, parts, null, null)
             }
+            insertSentSmsRow(to = to, body = body)
+            Unit
         }.onFailure { Log.e("SmsRepo", "sendSms failed: ${it.message}") }
+
+    /**
+     * Writes an outgoing SMS row to the Sent folder. Only the default SMS app
+     * can write here; silently logs and returns if we're not default.
+     */
+    private fun insertSentSmsRow(to: String, body: String) {
+        runCatching {
+            val values = ContentValues().apply {
+                put(Telephony.Sms.ADDRESS, to)
+                put(Telephony.Sms.BODY, body)
+                put(Telephony.Sms.DATE, System.currentTimeMillis())
+                put(Telephony.Sms.DATE_SENT, System.currentTimeMillis())
+                put(Telephony.Sms.READ, 1)
+                put(Telephony.Sms.SEEN, 1)
+                put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
+            }
+            context.contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
+        }.onFailure {
+            Log.w(
+                "SmsRepo",
+                "insertSentSmsRow failed (is WeW the default SMS app?): ${it.message}"
+            )
+        }
     }
 
     /**
@@ -255,7 +287,7 @@ class SmsRepository(private val context: Context) {
         body: String,
         imageUri: String? = null,
         imageMimeType: String = "image/jpeg"
-    ) = withContext(Dispatchers.IO) {
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val imageBytes = imageUri?.let { readBytesFromUri(it) }
             val pdu = MmsPduBuilder.build(
@@ -276,6 +308,7 @@ class SmsRepository(private val context: Context) {
                 SmsManager.getDefault()
             }
             smsManager.sendMultimediaMessage(context, tempUri, null, null, null)
+            Unit
         }.onFailure { Log.e("SmsRepo", "sendMms failed: ${it.message}") }
     }
 
@@ -307,13 +340,159 @@ class SmsRepository(private val context: Context) {
         }.onFailure { Log.e("SmsRepo", "markThreadRead failed: ${it.message}") }
     }
 
-    fun deleteThread(threadId: Long) {
+    /**
+     * Deletes all SMS and MMS for [threadId], then the conversation aggregate row.
+     * Deletes by row id where needed — some OEMs ignore bulk THREAD_ID deletes.
+     */
+    suspend fun deleteThread(threadId: Long) = withContext(Dispatchers.IO) {
+        val tid = threadId.toString()
+        runCatching {
+            context.contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(Telephony.Sms._ID),
+                "${Telephony.Sms.THREAD_ID} = ?",
+                arrayOf(tid),
+                null
+            )?.use { c ->
+                val idx = c.getColumnIndexOrThrow(Telephony.Sms._ID)
+                while (c.moveToNext()) {
+                    val id = c.getLong(idx)
+                    context.contentResolver.delete(
+                        Uri.parse("${Telephony.Sms.CONTENT_URI}/$id"),
+                        null,
+                        null
+                    )
+                }
+            }
+        }.onFailure { Log.e("SmsRepo", "deleteThread sms by id: ${it.message}") }
+        runCatching {
+            context.contentResolver.delete(
+                Telephony.Sms.CONTENT_URI,
+                "${Telephony.Sms.THREAD_ID} = ?",
+                arrayOf(tid)
+            )
+        }.onFailure { Log.e("SmsRepo", "deleteThread sms bulk: ${it.message}") }
+
+        runCatching {
+            context.contentResolver.query(
+                Telephony.Mms.CONTENT_URI,
+                arrayOf(Telephony.Mms._ID),
+                "${Telephony.Mms.THREAD_ID} = ?",
+                arrayOf(tid),
+                null
+            )?.use { c ->
+                val idx = c.getColumnIndexOrThrow(Telephony.Mms._ID)
+                while (c.moveToNext()) {
+                    val id = c.getLong(idx)
+                    context.contentResolver.delete(
+                        Uri.parse("${Telephony.Mms.CONTENT_URI}/$id"),
+                        null,
+                        null
+                    )
+                }
+            }
+        }.onFailure { Log.e("SmsRepo", "deleteThread mms by id: ${it.message}") }
+        runCatching {
+            context.contentResolver.delete(
+                Telephony.Mms.CONTENT_URI,
+                "${Telephony.Mms.THREAD_ID} = ?",
+                arrayOf(tid)
+            )
+        }.onFailure { Log.e("SmsRepo", "deleteThread mms bulk: ${it.message}") }
+
         runCatching {
             context.contentResolver.delete(
                 Uri.parse("content://mms-sms/conversations/$threadId"),
-                null, null
+                null,
+                null
             )
-        }.onFailure { Log.e("SmsRepo", "deleteThread failed: ${it.message}") }
+        }.onFailure { Log.e("SmsRepo", "deleteThread conv: ${it.message}") }
+    }
+
+    /**
+     * Participant addresses for a thread from actual SMS/MMS rows (source of truth).
+     * Conversation list metadata is wrong on some devices.
+     */
+    suspend fun getParticipantAddressesForThread(threadId: Long): Set<String> = withContext(Dispatchers.IO) {
+        val out = linkedSetOf<String>()
+        runCatching {
+            context.contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(Telephony.Sms.ADDRESS),
+                "${Telephony.Sms.THREAD_ID} = ?",
+                arrayOf(threadId.toString()),
+                null
+            )?.use { c ->
+                val idx = c.getColumnIndex(Telephony.Sms.ADDRESS)
+                if (idx >= 0) {
+                    while (c.moveToNext()) {
+                        c.getString(idx)?.takeIf { it.isNotBlank() }?.let { out.add(it) }
+                    }
+                }
+            }
+        }.onFailure { Log.e("SmsRepo", "getParticipantAddresses sms: ${it.message}") }
+        runCatching {
+            context.contentResolver.query(
+                Telephony.Mms.CONTENT_URI,
+                arrayOf(Telephony.Mms._ID),
+                "${Telephony.Mms.THREAD_ID} = ?",
+                arrayOf(threadId.toString()),
+                null
+            )?.use { c ->
+                val idx = c.getColumnIndexOrThrow(Telephony.Mms._ID)
+                while (c.moveToNext()) {
+                    getMmsSenderAddress(c.getLong(idx))
+                        .takeIf { it.isNotBlank() }
+                        ?.let { out.add(it) }
+                }
+            }
+        }.onFailure { Log.e("SmsRepo", "getParticipantAddresses mms: ${it.message}") }
+        out
+    }
+
+    /**
+     * Resolves an existing SMS thread for [phone], trying common address formats and
+     * falling back to scanning [getThreads] when the provider stores numbers differently.
+     */
+    suspend fun resolveThreadIdForContact(phone: String): Long = withContext(Dispatchers.IO) {
+        val trimmed = phone.trim()
+        if (trimmed.isEmpty()) return@withContext -1L
+        val candidates = buildSet {
+            add(trimmed)
+            add(
+                trimmed.replace(" ", "")
+                    .replace("-", "")
+                    .replace("(", "")
+                    .replace(")", "")
+            )
+            val d = PhoneMatch.digitsOnly(trimmed)
+            when {
+                d.length == 10 -> {
+                    add(d)
+                    add("1$d")
+                    add("+1$d")
+                }
+                d.length == 11 && d.startsWith("1") -> {
+                    add(d)
+                    add("+$d")
+                    add(d.drop(1))
+                }
+                d.isNotEmpty() -> add(d)
+            }
+        }
+        for (c in candidates) {
+            if (c.isBlank()) continue
+            val tid = getThreadIdForAddress(c)
+            if (tid != -1L) return@withContext tid
+        }
+        val threads = getThreads()
+        for (t in threads) {
+            val addrs = t.address.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            if (addrs.any { PhoneMatch.sameSubscriber(it, trimmed) }) {
+                return@withContext t.threadId
+            }
+        }
+        -1L
     }
 
     /**

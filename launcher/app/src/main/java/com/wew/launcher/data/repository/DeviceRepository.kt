@@ -22,6 +22,7 @@ import com.wew.launcher.data.model.TokenRequest
 import com.wew.launcher.data.model.UrlAccessRequest
 import com.wew.launcher.data.model.UrlFilter
 import com.wew.launcher.data.model.WewContact
+import com.wew.launcher.sms.MessagingCapability
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import io.github.jan.supabase.postgrest.query.Order
@@ -54,6 +55,21 @@ class DeviceRepository(private val context: Context) {
         supabase.postgrest["devices"].update(
             buildJsonObject { put("last_seen_at", "now()") }
         ) { filter { eq("id", deviceId) } }
+    }
+
+    /** Reports default-SMS role and SMS runtime permissions for the parent app. */
+    suspend fun syncMessagingHealth(deviceId: String) {
+        runCatching {
+            val defaultSms = MessagingCapability.isDefaultSmsApp(context)
+            val permsOk = MessagingCapability.hasCoreSmsRuntimePermissions(context)
+            supabase.postgrest["devices"].update(
+                buildJsonObject {
+                    put("child_default_sms_app", defaultSms)
+                    put("child_sms_permissions_ok", permsOk)
+                    put("child_messaging_health_at", "now()")
+                }
+            ) { filter { eq("id", deviceId) } }
+        }.onFailure { Log.e("WewSync", "syncMessagingHealth: ${it.message}") }
     }
 
     /** Sync Android SMS thread_id for the WeW Parent conversation (enables server daily summaries). */
@@ -260,20 +276,47 @@ class DeviceRepository(private val context: Context) {
             pm.getInstalledApplications(0)
         }
 
+        // Refresh inventory (name, system flag). Only touch is_whitelisted for built-in default
+        // packages so the launcher keeps working; omit the field for everything else so parent
+        // approvals in the dashboard are not wiped on each sync.
         val jsonRecords = installedApps.map { appInfo ->
             buildJsonObject {
                 put("device_id", deviceId)
                 put("package_name", appInfo.packageName)
                 put("app_name", pm.getApplicationLabel(appInfo).toString())
-                put("is_whitelisted", DEFAULT_WHITELIST.contains(appInfo.packageName))
                 put("is_system_app", (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0)
                 put("credit_cost", 1)
+                if (DEFAULT_WHITELIST.contains(appInfo.packageName)) {
+                    put("is_whitelisted", true)
+                }
             }
         }
 
         jsonRecords.chunked(50).forEach { chunk ->
             supabase.postgrest["apps"].upsert(chunk, onConflict = "device_id,package_name")
         }
+    }
+
+    /**
+     * Pushes the full installed-app list for the parent dashboard.
+     * Throttled to avoid scanning PackageManager on every conversation-list refresh.
+     *
+     * @param force when true, sync immediately (e.g. opening the app grid).
+     */
+    suspend fun syncAppListIfStale(
+        deviceId: String,
+        context: Context,
+        force: Boolean = false,
+        minIntervalMs: Long = 10 * 60_000L
+    ) {
+        val prefs = context.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val last = prefs.getLong(PREF_LAST_APP_LIST_SYNC_MS, 0L)
+        if (!force && last > 0L && now - last < minIntervalMs) return
+        runCatching {
+            syncAppList(deviceId, context)
+            prefs.edit().putLong(PREF_LAST_APP_LIST_SYNC_MS, now).apply()
+        }.onFailure { Log.e("WewSync", "syncAppListIfStale failed", it) }
     }
 
     // ── Activity + location logs ──────────────────────────────────────────────
@@ -303,9 +346,9 @@ class DeviceRepository(private val context: Context) {
         return runCatching {
             supabase.postgrest["access_schedule"]
                 .select(Columns.ALL) { filter { eq("device_id", deviceId) } }
-                .decodeList()
-        }.getOrElse {
-            Log.w("WewSchedule", "getAccessSchedule: ${it.message}")
+                .decodeList<com.wew.launcher.data.model.AccessScheduleDay>()
+        }.getOrElse { e ->
+            Log.w("WewSchedule", "getAccessSchedule: ${e.message}")
             emptyList()
         }
     }
@@ -493,6 +536,8 @@ class DeviceRepository(private val context: Context) {
     }
 
     companion object {
+        private const val PREF_LAST_APP_LIST_SYNC_MS = "last_app_list_sync_ms"
+
         val DEFAULT_WHITELIST = setOf(
             "com.android.dialer",
             "com.google.android.dialer",

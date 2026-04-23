@@ -4,10 +4,19 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.util.Log
 import com.wew.launcher.data.SupabaseClient
+import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.telecom.WewCallManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class WewApplication : Application() {
+
+    private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
@@ -15,8 +24,22 @@ class WewApplication : Application() {
             url = BuildConfig.SUPABASE_URL,
             key = BuildConfig.SUPABASE_ANON_KEY
         )
-        WewCallManager.ensurePhoneAccountRegistered(this)
+        WewCallManager.init(this)
         createNotificationChannels()
+
+        val deviceId = getSharedPreferences("wew_prefs", MODE_PRIVATE).getString("device_id", null)
+        if (!deviceId.isNullOrBlank()) {
+            syncScope.launch {
+                delay(1_500L)
+                runCatching {
+                    DeviceRepository(this@WewApplication).syncAppListIfStale(
+                        deviceId = deviceId,
+                        context = this@WewApplication,
+                        force = true
+                    )
+                }.onFailure { Log.e("WewSync", "startup app inventory sync failed", it) }
+            }
+        }
     }
 
     private fun createNotificationChannels() {

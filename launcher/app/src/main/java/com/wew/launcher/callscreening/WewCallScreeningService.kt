@@ -1,7 +1,7 @@
 package com.wew.launcher.callscreening
 
+import android.telecom.Call
 import android.telecom.CallScreeningService
-import android.telecom.CallScreeningService.CallDetails
 import android.telecom.CallScreeningService.CallResponse
 import android.util.Log
 import com.wew.launcher.telecom.ParentPushNotifier
@@ -14,7 +14,7 @@ import com.wew.launcher.telecom.WewPhoneAllowlist
  */
 class WewCallScreeningService : CallScreeningService() {
 
-    override fun onScreenCall(callDetails: CallDetails) {
+    override fun onScreenCall(callDetails: Call.Details) {
         val prefs = applicationContext.getSharedPreferences("wew_prefs", MODE_PRIVATE)
         val deviceId = prefs.getString("device_id", null).orEmpty()
         val handle = callDetails.handle

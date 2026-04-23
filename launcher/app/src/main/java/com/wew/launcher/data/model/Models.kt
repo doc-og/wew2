@@ -1,6 +1,7 @@
 package com.wew.launcher.data.model
 
 import android.graphics.drawable.Drawable
+import com.wew.launcher.telecom.PhoneMatch
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -30,7 +31,12 @@ data class Device(
     // Legacy credit fields — kept so the DB column is still readable; no longer driven by app
     @SerialName("current_credits")      val currentCredits: Int      = 0,
     @SerialName("daily_credit_budget")  val dailyCreditBudget: Int   = 0,
-    @SerialName("last_seen_at")      val lastSeenAt: String?     = null
+    @SerialName("last_seen_at")      val lastSeenAt: String?     = null,
+    /** Pushed from launcher: child is default SMS app (parent dashboard). */
+    @SerialName("child_default_sms_app") val childDefaultSmsApp: Boolean = false,
+    /** Pushed from launcher: READ/RECEIVE/SEND SMS granted on child. */
+    @SerialName("child_sms_permissions_ok") val childSmsPermissionsOk: Boolean = false,
+    @SerialName("child_messaging_health_at") val childMessagingHealthAt: String? = null
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,15 +290,71 @@ data class WewContact(
     val id: String? = null,
     @SerialName("device_id")    val deviceId: String,
     val name: String,
+    @SerialName("first_name")   val firstName: String?     = null,
+    @SerialName("last_name")    val lastName: String?      = null,
+    val nickname: String?       = null,
     val phone: String?          = null,
     val email: String?          = null,
+    val relationship: String?   = null,
     val address: String?        = null,
     @SerialName("photo_url")    val photoUrl: String?      = null,
     @SerialName("is_authorized") val isAuthorized: Boolean = false,
+    /** Parent app: requested | approved | blocked (optional on older rows). */
+    val status: String?         = null,
     val notes: String?          = null,
     @SerialName("created_at")   val createdAt: String?     = null,
     @SerialName("updated_at")   val updatedAt: String?     = null
 )
+
+/** Display line for UI — mirrors parent app [Contact.displayName]. */
+fun WewContact.composedDisplayName(): String =
+    listOfNotNull(
+        firstName?.trim()?.takeIf { it.isNotEmpty() },
+        lastName?.trim()?.takeIf { it.isNotEmpty() }
+    ).joinToString(" ")
+        .ifBlank {
+            nickname?.trim()?.takeIf { it.isNotEmpty() } ?: name.trim()
+        }
+
+private fun WewContact.contactSearchHaystack(): String {
+    val parts = listOfNotNull(
+        name.takeIf { it.isNotBlank() },
+        firstName?.takeIf { !it.isNullOrBlank() },
+        lastName?.takeIf { !it.isNullOrBlank() },
+        nickname?.takeIf { !it.isNullOrBlank() },
+        phone?.takeIf { !it.isNullOrBlank() },
+        relationship?.takeIf { !it.isNullOrBlank() },
+        email?.takeIf { !it.isNullOrBlank() },
+        address?.takeIf { !it.isNullOrBlank() },
+        notes?.takeIf { !it.isNullOrBlank() },
+    )
+    return parts.joinToString(" \n ").lowercase()
+}
+
+/** Case-insensitive substring match on structured contact fields; phone also matches digit-only query. */
+fun WewContact.matchesContactSearch(rawQuery: String): Boolean {
+    val q = rawQuery.trim().lowercase()
+    if (q.isEmpty()) return false
+    if (contactSearchHaystack().contains(q)) return true
+    val qDigits = PhoneMatch.digitsOnly(q)
+    if (qDigits.isNotEmpty()) {
+        val pDigits = PhoneMatch.digitsOnly(phone.orEmpty())
+        if (pDigits.contains(qDigits)) return true
+    }
+    return false
+}
+
+/** Parent has approved this person for calls/SMS (and we have a phone to match threads). */
+fun WewContact.isApprovedForComms(): Boolean {
+    if (phone.isNullOrBlank()) return false
+    return when (status?.lowercase()) {
+        "blocked", "denied" -> false
+        "requested" -> false
+        "approved" -> true
+        null, "" -> isAuthorized
+        else -> isAuthorized
+    }
+}
 
 @Serializable
 data class ContactAuthRequest(

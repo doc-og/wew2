@@ -1,15 +1,18 @@
 package com.wew.launcher.telecom
 
-import android.content.ComponentName
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
-import android.telecom.PhoneAccount
-import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.telephony.PhoneNumberUtils
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
+import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.wew.launcher.data.model.ActionType
@@ -27,8 +30,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import android.Manifest
-import android.content.pm.PackageManager
 
 enum class InCallDisplayMode {
     OUTGOING_ACTIVE,
@@ -58,60 +59,33 @@ data class WewInCallUiState(
 )
 
 /**
- * Registers a self-managed [PhoneAccount] and places cellular calls through [TelecomManager]
- * so the system dialer UI is never shown. In-call controls are handled in-app.
+ * Places cellular calls via Intent.ACTION_CALL and surfaces in-app overlay state.
+ * The overlay is rendered in WewInCallOverlayService (WindowManager TYPE_APPLICATION_OVERLAY)
+ * so it floats over the system dialer.
  */
 object WewCallManager {
 
     private const val TAG = "WewCall"
-    private const val ACCOUNT_ID = "wew_self_managed"
 
     private var appContext: Context? = null
-
-    private var phoneAccountHandle: PhoneAccountHandle? = null
-
-    private var pendingDisplayLabel: String? = null
-
-    private data class PendingSession(
-        val participants: List<CallParticipant>,
-        val chargeMetering: Boolean,
-        val tokenBalanceHint: Int?,
-        val normalizedPrimary: String
-    )
-
-    private var pendingSession: PendingSession? = null
-
-    private var activeConnection: android.telecom.Connection? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var tickerJob: Job? = null
     private var callRadioActive: Boolean = false
     private var lastMeteredActiveMinute: Int = 0
     private var costOverrides: Map<String, Int> = emptyMap()
+    private var callEnded: Boolean = true
+
+    private var callStateCallback: TelephonyCallback? = null
+    private var callStateListenerLegacy: PhoneStateListener? = null
 
     private val _uiState = MutableStateFlow<WewInCallUiState?>(null)
     val uiState: StateFlow<WewInCallUiState?> = _uiState.asStateFlow()
 
-    fun ensurePhoneAccountRegistered(context: Context) {
-        val app = context.applicationContext.also { appContext = it }
-        val telecom = app.getSystemService(TelecomManager::class.java) ?: return
-        if (phoneAccountHandle != null) return
-
-        val component = ComponentName(app, WewConnectionService::class.java)
-        val handle = PhoneAccountHandle(component, ACCOUNT_ID)
-        val account = PhoneAccount.Builder(handle, "WeW")
-            .setCapabilities(PhoneAccount.CAPABILITY_SELF_MANAGED)
-            .build()
-        telecom.registerPhoneAccount(account)
-        phoneAccountHandle = handle
+    fun init(context: Context) {
+        appContext = context.applicationContext
     }
 
-    /**
-     * @param groupMembers Full set of thread participants with phones (e.g. group MMS). The dialed
-     * [rawNumber] should be included; others are shown as "also on this thread".
-     * @param chargeMetering When false, no per-minute token charges (SOS to parent).
-     * @param tokenBalanceHint Balance after the upfront call charge, if known.
-     */
     fun placeCall(
         context: Context,
         rawNumber: String,
@@ -127,17 +101,6 @@ object WewCallManager {
             Log.w(TAG, "CALL_PHONE not granted; cannot place call")
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            ContextCompat.checkSelfPermission(app, Manifest.permission.MANAGE_OWN_CALLS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            Log.w(TAG, "MANAGE_OWN_CALLS not granted; cannot place self-managed call")
-            return
-        }
-
-        ensurePhoneAccountRegistered(app)
-        val handle = phoneAccountHandle ?: return
-        val telecom = app.getSystemService(TelecomManager::class.java) ?: return
 
         val normalized = normalizeDialString(rawNumber)
         if (normalized.isBlank()) {
@@ -145,28 +108,42 @@ object WewCallManager {
             return
         }
 
-        pendingDisplayLabel = displayLabel.ifBlank { normalized }
         val participants = buildParticipantRoster(displayLabel, normalized, groupMembers)
-        pendingSession = PendingSession(
-            participants = participants,
-            chargeMetering = chargeMetering,
-            tokenBalanceHint = tokenBalanceHint,
-            normalizedPrimary = normalized
+        val others = participants.filter { !PhoneMatch.sameSubscriber(it.phone, normalized) }
+
+        callEnded = false
+        callRadioActive = false
+        lastMeteredActiveMinute = 0
+        costOverrides = emptyMap()
+
+        _uiState.value = WewInCallUiState(
+            displayName = displayLabel.ifBlank { normalized },
+            phoneNumber = normalized,
+            speakerOn = false,
+            currentTokens = tokenBalanceHint,
+            elapsedSeconds = 0,
+            activeElapsedSeconds = 0,
+            otherParticipants = others,
+            mode = InCallDisplayMode.OUTGOING_ACTIVE,
+            chargeMetering = chargeMetering
         )
 
-        val uri = Uri.fromParts(PhoneAccount.SCHEME_TEL, normalized, null)
-        val extras = android.os.Bundle().apply {
-            putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
-        }
+        prefetchTokenCostsAndBalance()
+        startTicker()
+        registerCallStateTracking(app)
 
-        runCatching {
-            telecom.placeCall(uri, extras)
-        }.onFailure {
-            Log.e(TAG, "placeCall failed", it)
-            pendingDisplayLabel = null
-            pendingSession = null
-            _uiState.value = null
+        // Show overlay over system dialer
+        app.startService(Intent(app, WewInCallOverlayService::class.java))
+
+        // Place real cellular call
+        val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$normalized")).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
+        runCatching { app.startActivity(callIntent) }
+            .onFailure {
+                Log.e(TAG, "ACTION_CALL failed", it)
+                onCallEnded()
+            }
     }
 
     private fun buildParticipantRoster(
@@ -175,45 +152,129 @@ object WewCallManager {
         groupMembers: List<CallParticipant>
     ): List<CallParticipant> {
         if (groupMembers.isNotEmpty()) return groupMembers
-        return listOf(
-            CallParticipant(
-                displayName = displayLabel.ifBlank { normalizedPrimary },
-                phone = normalizedPrimary
-            )
-        )
+        return listOf(CallParticipant(displayLabel.ifBlank { normalizedPrimary }, normalizedPrimary))
     }
 
-    internal fun onOutgoingConnectionCreated(connection: android.telecom.Connection, number: String) {
-        activeConnection = connection
-        val label = pendingDisplayLabel?.takeIf { it.isNotBlank() } ?: number
-        pendingDisplayLabel = null
-        val pend = pendingSession
-        pendingSession = null
-        val participants = pend?.participants ?: listOf(CallParticipant(label, number))
-        val primaryNorm = normalizeDialString(pend?.normalizedPrimary ?: number)
-        val others = participants.filter { normalizeDialString(it.phone) != primaryNorm }
+    private fun registerCallStateTracking(context: Context) {
+        val telephony = context.getSystemService(TelephonyManager::class.java) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                override fun onCallStateChanged(state: Int) = handleCallState(state)
+            }
+            callStateCallback = cb
+            telephony.registerTelephonyCallback(context.mainExecutor, cb)
+        } else {
+            val listener = object : PhoneStateListener() {
+                @Deprecated("Deprecated in Java")
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) =
+                    handleCallState(state)
+            }
+            callStateListenerLegacy = listener
+            @Suppress("DEPRECATION")
+            telephony.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
+        }
+    }
+
+    private fun unregisterCallStateTracking() {
+        val ctx = appContext ?: return
+        val telephony = ctx.getSystemService(TelephonyManager::class.java) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            callStateCallback?.let { telephony.unregisterTelephonyCallback(it) }
+            callStateCallback = null
+        } else {
+            callStateListenerLegacy?.let {
+                @Suppress("DEPRECATION")
+                telephony.listen(it, PhoneStateListener.LISTEN_NONE)
+            }
+            callStateListenerLegacy = null
+        }
+    }
+
+    private fun handleCallState(state: Int) {
+        when (state) {
+            TelephonyManager.CALL_STATE_OFFHOOK -> {
+                if (!callRadioActive) callRadioActive = true
+            }
+            TelephonyManager.CALL_STATE_IDLE -> {
+                if (_uiState.value?.mode == InCallDisplayMode.OUTGOING_ACTIVE) {
+                    onCallEnded()
+                }
+            }
+        }
+    }
+
+    private fun onCallEnded() {
+        if (callEnded) return
+        callEnded = true
+        unregisterCallStateTracking()
+        tickerJob?.cancel()
+        tickerJob = null
         callRadioActive = false
         lastMeteredActiveMinute = 0
-        costOverrides = emptyMap()
-
-        _uiState.value = WewInCallUiState(
-            displayName = label,
-            phoneNumber = number,
-            speakerOn = false,
-            currentTokens = pend?.tokenBalanceHint,
-            elapsedSeconds = 0,
-            activeElapsedSeconds = 0,
-            otherParticipants = others,
-            mode = InCallDisplayMode.OUTGOING_ACTIVE,
-            chargeMetering = pend?.chargeMetering ?: true
-        )
-
-        prefetchTokenCostsAndBalance()
-        startTicker()
+        appContext?.let { applySpeakerRoute(it, false) }
+        _uiState.value = null
+        appContext?.let { ctx ->
+            ctx.stopService(Intent(ctx, WewInCallOverlayService::class.java))
+        }
     }
 
-    internal fun onCallRadioActive() {
-        callRadioActive = true
+    /** Brief UI after [com.wew.launcher.callscreening.WewCallScreeningService] blocks an unknown caller. */
+    fun showBlockedUnknownCall(incomingNumber: String?) {
+        scope.launch {
+            tickerJob?.cancel()
+            callEnded = true
+            callRadioActive = false
+
+            _uiState.value = WewInCallUiState(
+                displayName = "unknown caller",
+                phoneNumber = incomingNumber?.ifBlank { "withheld" } ?: "withheld",
+                speakerOn = false,
+                currentTokens = null,
+                elapsedSeconds = 0,
+                activeElapsedSeconds = 0,
+                otherParticipants = emptyList(),
+                mode = InCallDisplayMode.UNKNOWN_BLOCKED,
+                chargeMetering = false
+            )
+            // Show overlay briefly for the blocked-call banner
+            appContext?.let { ctx ->
+                ctx.startService(Intent(ctx, WewInCallOverlayService::class.java))
+            }
+            delay(8_000)
+            if (_uiState.value?.mode == InCallDisplayMode.UNKNOWN_BLOCKED) {
+                _uiState.value = null
+                appContext?.let { ctx ->
+                    ctx.stopService(Intent(ctx, WewInCallOverlayService::class.java))
+                }
+            }
+        }
+    }
+
+    fun hangUp() {
+        val mode = _uiState.value?.mode
+        if (mode == InCallDisplayMode.UNKNOWN_BLOCKED) {
+            tickerJob?.cancel()
+            _uiState.value = null
+            appContext?.let { ctx ->
+                ctx.stopService(Intent(ctx, WewInCallOverlayService::class.java))
+            }
+            return
+        }
+        val ctx = appContext ?: return
+        val telecom = ctx.getSystemService(TelecomManager::class.java)
+        runCatching {
+            @Suppress("DEPRECATION")
+            telecom?.endCall()
+        }.onFailure { Log.e(TAG, "endCall failed", it) }
+        onCallEnded()
+    }
+
+    fun toggleSpeaker(context: Context) {
+        val current = _uiState.value ?: return
+        if (current.mode != InCallDisplayMode.OUTGOING_ACTIVE) return
+        val newSpeaker = !current.speakerOn
+        applySpeakerRoute(context.applicationContext, newSpeaker)
+        _uiState.value = current.copy(speakerOn = newSpeaker)
     }
 
     private fun prefetchTokenCostsAndBalance() {
@@ -240,19 +301,15 @@ object WewCallManager {
                 delay(1000)
                 val s = _uiState.value ?: break
                 if (s.mode != InCallDisplayMode.OUTGOING_ACTIVE) continue
-
                 val newElapsed = s.elapsedSeconds + 1
                 val newActive = if (callRadioActive) s.activeElapsedSeconds + 1 else s.activeElapsedSeconds
-                _uiState.value = s.copy(
-                    elapsedSeconds = newElapsed,
-                    activeElapsedSeconds = newActive
-                )
+                _uiState.value = s.copy(elapsedSeconds = newElapsed, activeElapsedSeconds = newActive)
                 maybeBillPerActiveMinute(newActive, s.chargeMetering)
             }
         }
     }
 
-       private fun maybeBillPerActiveMinute(activeSeconds: Int, chargeMetering: Boolean) {
+    private fun maybeBillPerActiveMinute(activeSeconds: Int, chargeMetering: Boolean) {
         if (!chargeMetering) return
         val minute = activeSeconds / 60
         if (minute <= lastMeteredActiveMinute) return
@@ -260,15 +317,8 @@ object WewCallManager {
         val prefs = ctx.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
         val deviceId = prefs.getString("device_id", null) ?: return
 
-        val perMinute = TokenEngine.calculateCost(
-            ActionType.CALL_MADE,
-            durationUnits = 1,
-            overrides = costOverrides
-        ) - TokenEngine.calculateCost(
-            ActionType.CALL_MADE,
-            durationUnits = 0,
-            overrides = costOverrides
-        )
+        val perMinute = TokenEngine.calculateCost(ActionType.CALL_MADE, durationUnits = 1, overrides = costOverrides) -
+            TokenEngine.calculateCost(ActionType.CALL_MADE, durationUnits = 0, overrides = costOverrides)
         if (perMinute <= 0) {
             lastMeteredActiveMinute = minute
             return
@@ -291,74 +341,9 @@ object WewCallManager {
             }
             val newBal = lastBal
             withContext(Dispatchers.Main.immediate) {
-                if (newBal != null) {
-                    _uiState.update { st -> st?.copy(currentTokens = newBal) }
-                }
+                if (newBal != null) _uiState.update { st -> st?.copy(currentTokens = newBal) }
             }
         }
-    }
-
-    /** Brief UI after [com.wew.launcher.callscreening.WewCallScreeningService] blocks an unknown caller. */
-    fun showBlockedUnknownCall(incomingNumber: String?) {
-        scope.launch {
-            tickerJob?.cancel()
-            activeConnection = null
-            callRadioActive = false
-            pendingSession = null
-            pendingDisplayLabel = null
-
-            _uiState.value = WewInCallUiState(
-                displayName = "unknown caller",
-                phoneNumber = incomingNumber?.ifBlank { "withheld" } ?: "withheld",
-                speakerOn = false,
-                currentTokens = null,
-                elapsedSeconds = 0,
-                activeElapsedSeconds = 0,
-                otherParticipants = emptyList(),
-                mode = InCallDisplayMode.UNKNOWN_BLOCKED,
-                chargeMetering = false
-            )
-            delay(8_000)
-            if (_uiState.value?.mode == InCallDisplayMode.UNKNOWN_BLOCKED) {
-                _uiState.value = null
-            }
-        }
-    }
-
-    internal fun onConnectionDisposed() {
-        tickerJob?.cancel()
-        tickerJob = null
-        activeConnection = null
-        callRadioActive = false
-        lastMeteredActiveMinute = 0
-        appContext?.let { applySpeakerRoute(it, false) }
-        _uiState.value = null
-    }
-
-    fun hangUp() {
-        val mode = _uiState.value?.mode
-        if (mode == InCallDisplayMode.UNKNOWN_BLOCKED) {
-            tickerJob?.cancel()
-            _uiState.value = null
-            return
-        }
-        val conn = activeConnection ?: return
-        runCatching { disconnectViaReflection(conn) }
-            .onFailure { Log.e(TAG, "hangUp failed", it) }
-    }
-
-    /** Javac/Kotlin stubs omit [android.telecom.Connection.disconnect] in some setups; invoke reflectively. */
-    private fun disconnectViaReflection(conn: android.telecom.Connection) {
-        val m = conn.javaClass.getMethod("disconnect")
-        m.invoke(conn)
-    }
-
-    fun toggleSpeaker(context: Context) {
-        val current = _uiState.value ?: return
-        if (current.mode != InCallDisplayMode.OUTGOING_ACTIVE) return
-        val newSpeaker = !current.speakerOn
-        applySpeakerRoute(context.applicationContext, newSpeaker)
-        _uiState.value = current.copy(speakerOn = newSpeaker)
     }
 
     private fun applySpeakerRoute(context: Context, speakerOn: Boolean) {
@@ -372,11 +357,8 @@ object WewCallManager {
             } else {
                 val earpiece = audio.availableCommunicationDevices
                     .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
-                if (earpiece != null) {
-                    audio.setCommunicationDevice(earpiece)
-                } else {
-                    audio.clearCommunicationDevice()
-                }
+                if (earpiece != null) audio.setCommunicationDevice(earpiece)
+                else audio.clearCommunicationDevice()
             }
         } else {
             @Suppress("DEPRECATION")

@@ -93,6 +93,11 @@ fun AccessScheduleScreen(
 
     LaunchedEffect(deviceId) {
         isLoading = true
+        if (deviceId.isBlank()) {
+            isLoading = false
+            saveError = "No device linked — open Settings from the dashboard after registering."
+            return@LaunchedEffect
+        }
         val loaded = runCatching { repo.getAccessSchedule(deviceId) }.getOrDefault(emptyList())
         // Merge loaded rows into the default list (keeps days absent from DB as disabled defaults)
         days = days.map { default ->

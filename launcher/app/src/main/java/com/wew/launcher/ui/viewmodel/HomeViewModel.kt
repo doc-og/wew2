@@ -90,8 +90,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             runCatching {
-                repo.syncAppList(deviceId, getApplication())
+                repo.syncAppListIfStale(deviceId, getApplication(), force = true)
                 val device = repo.getDevice(deviceId)
+                device.timezone.takeIf { it.isNotBlank() }?.let {
+                    prefs.edit().putString("device_timezone", it).apply()
+                }
                 val appPolicies = repo.getAppPolicies(deviceId)
                 NotificationPolicyStore.writePolicies(appContext, appPolicies)
                 val appInfoList = buildWhitelistedAppList(appPolicies)
@@ -131,6 +134,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     val appPolicies = repo.getAppPolicies(deviceId)
                     NotificationPolicyStore.writePolicies(appContext, appPolicies)
                     val device = repo.getDevice(deviceId)
+                    device.timezone.takeIf { it.isNotBlank() }?.let {
+                        prefs.edit().putString("device_timezone", it).apply()
+                    }
                     val appInfoList = buildWhitelistedAppList(appPolicies)
                     val tempAccess = repo.getActiveTempAccess(deviceId)
                     val tempAccessMap = tempAccess.associate { it.packageName to it.expiresAt }
