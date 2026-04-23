@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -26,7 +28,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,7 +63,6 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
     var showPassword by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var isSignUpMode by remember { mutableStateOf(false) }
 
     val passwordFocus = remember { FocusRequester() }
 
@@ -71,133 +71,121 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
         scope.launch {
             isLoading = true
             errorMessage = null
-            val action = if (isSignUpMode) {
-                runCatching { repo.signUp(email.trim(), password) }
-            } else {
-                runCatching { repo.signIn(email.trim(), password) }
-            }
-            action
+            runCatching { repo.signIn(email.trim(), password) }
                 .onSuccess { onLoginSuccess() }
                 .onFailure { e ->
                     errorMessage = e.toUserMessage(
-                        if (isSignUpMode) "Couldn't create account — please try again"
-                        else "Sign in failed — please check your credentials"
+                        "Sign in failed — please check your credentials"
                     )
                 }
             isLoading = false
         }
     }
 
+    // Two-region layout: scrollable upper body (logo + fields) and a
+    // fixed footer that holds the primary CTA. imePadding() is applied to
+    // the outer Column so both regions lift above the keyboard, guaranteeing
+    // the Sign In button is visible whenever the keyboard is open.
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(ParentBackground)
-            .verticalScroll(rememberScrollState())
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .imePadding()
-            .padding(horizontal = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .padding(horizontal = 28.dp)
     ) {
-        Spacer(modifier = Modifier.height(64.dp))
-
-        // Brand mark
-        Text(
-            text = "WeW",
-            fontSize = 52.sp,
-            fontWeight = FontWeight.Bold,
-            color = BrandViolet,
-            letterSpacing = (-1).sp
-        )
-        Text(
-            text = "Parent",
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Medium,
-            color = ElectricViolet.copy(alpha = 0.75f),
-            letterSpacing = 2.sp
-        )
-
-        Spacer(modifier = Modifier.height(56.dp))
-
-        // Screen heading
-        Text(
-            text = if (isSignUpMode) "Create your account" else "Welcome back",
-            fontSize = 22.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = Color(0xFF1A1A2E)
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = if (isSignUpMode) "Sign up to manage your child's device"
-                   else "Sign in to your parent account",
-            fontSize = 14.sp,
-            color = Color(0xFF6B6B8A)
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        OutlinedTextField(
-            value = email,
-            onValueChange = { email = it },
-            label = { Text("Email address") },
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Email,
-                imeAction = ImeAction.Next
-            ),
-            keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = BrandViolet,
-                focusedLabelColor = BrandViolet
-            )
-        )
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Password") },
-            visualTransformation = if (showPassword) VisualTransformation.None
-                                   else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(onDone = { submit() }),
-            trailingIcon = {
-                IconButton(onClick = { showPassword = !showPassword }) {
-                    Icon(
-                        if (showPassword) Icons.Default.VisibilityOff
-                        else Icons.Default.Visibility,
-                        contentDescription = if (showPassword) "Hide password" else "Show password",
-                        tint = Color(0xFF9999AA)
-                    )
-                }
-            },
-            singleLine = true,
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .focusRequester(passwordFocus),
-            shape = RoundedCornerShape(14.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = BrandViolet,
-                focusedLabelColor = BrandViolet
-            )
-        )
+                .weight(1f, fill = true)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Spacer(modifier = Modifier.height(16.dp))
 
-        if (errorMessage != null) {
-            Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = errorMessage!!,
-                fontSize = 13.sp,
-                color = Color(0xFFC0392B),
-                modifier = Modifier.fillMaxWidth()
+                text = "WeW",
+                fontSize = 44.sp,
+                fontWeight = FontWeight.Bold,
+                color = BrandViolet,
+                letterSpacing = (-1).sp
             )
-        }
+            Text(
+                text = "Parent",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                color = ElectricViolet.copy(alpha = 0.75f),
+                letterSpacing = 2.sp
+            )
 
-        Spacer(modifier = Modifier.height(28.dp))
+            Spacer(modifier = Modifier.height(28.dp))
+
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it },
+                label = { Text("Email address") },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Email,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { passwordFocus.requestFocus() }),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BrandViolet,
+                    focusedLabelColor = BrandViolet
+                )
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("Password") },
+                visualTransformation = if (showPassword) VisualTransformation.None
+                                       else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
+                trailingIcon = {
+                    IconButton(onClick = { showPassword = !showPassword }) {
+                        Icon(
+                            if (showPassword) Icons.Default.VisibilityOff
+                            else Icons.Default.Visibility,
+                            contentDescription = if (showPassword) "Hide password" else "Show password",
+                            tint = Color(0xFF9999AA)
+                        )
+                    }
+                },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(passwordFocus),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = BrandViolet,
+                    focusedLabelColor = BrandViolet
+                )
+            )
+
+            if (errorMessage != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = errorMessage!!,
+                    fontSize = 13.sp,
+                    color = Color(0xFFC0392B),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         Button(
             onClick = { submit() },
@@ -219,7 +207,7 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                 )
             } else {
                 Text(
-                    text = if (isSignUpMode) "Create Account" else "Sign In",
+                    text = "Sign In",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1
@@ -228,19 +216,5 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-
-        TextButton(
-            onClick = { isSignUpMode = !isSignUpMode; errorMessage = null }
-        ) {
-            Text(
-                text = if (isSignUpMode) "Already have an account? Sign in"
-                       else "New here? Create an account",
-                fontSize = 14.sp,
-                color = BrandViolet.copy(alpha = 0.85f),
-                maxLines = 1
-            )
-        }
-
-        Spacer(modifier = Modifier.height(64.dp))
     }
 }
