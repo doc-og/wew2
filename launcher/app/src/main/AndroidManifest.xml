@@ -76,7 +76,8 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:stateNotNeeded="true"
-            android:excludeFromRecents="true">
+            android:excludeFromRecents="true"
+            android:windowSoftInputMode="adjustResize">
 
             <!-- Launcher / home -->
             <intent-filter android:priority="1000">
