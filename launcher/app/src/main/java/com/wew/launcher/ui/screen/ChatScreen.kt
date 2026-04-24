@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.foundation.border
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.AlertDialog
@@ -142,6 +143,9 @@ fun ChatScreen(
     mergeSystemSummaries: Boolean,
     composeSession: Int = 0,
     conversationListViewModel: ConversationListViewModel? = null,
+    isGroup: Boolean = false,
+    unapprovedParticipantLabels: List<String> = emptyList(),
+    participantAddresses: List<String> = emptyList(),
     onBack: () -> Unit,
     onOpenUrl: (String) -> Unit = {}
 ) {
@@ -171,7 +175,10 @@ fun ChatScreen(
             recipientAddress = recipientAddress,
             recipientName = displayName,
             mergeSystemSummaries = mergeSystemSummaries,
-            initialRecipients = emptyList()
+            initialRecipients = emptyList(),
+            initialIsGroup = isGroup,
+            initialUnapprovedParticipantLabels = unapprovedParticipantLabels,
+            initialRecipientAddresses = participantAddresses
         )
     )
     val state by vm.uiState.collectAsState()
@@ -264,7 +271,9 @@ fun ChatScreen(
                 displayName = state.recipientName.ifBlank { displayName },
                 onBack = onBack,
                 onCall = vm::onCallClick,
-                callEnabled = state.recipientAddress.isNotBlank()
+                // Group calls aren't wired through WewCallManager yet; 1:1 calls only.
+                callEnabled = state.recipientAddress.isNotBlank() && !state.isGroup,
+                isGroup = state.isGroup
             )
         }
 
@@ -362,18 +371,55 @@ fun ChatScreen(
             }
         }
 
-        InputBar(
-            text = state.inputText,
-            onTextChange = vm::onInputChange,
-            onSend = vm::sendMessage,
-            onAttach = { photoPicker.launch("image/*") },
-            isSending = state.isSending,
-            tokensExhausted = state.tokensExhausted,
-            sendError = state.sendError,
-            attachedImageUri = state.attachedImageUri,
-            onClearAttachment = vm::clearAttachment,
-            isMms = state.attachedImageUri != null,
-            sendEnabled = state.selectedRecipients.isNotEmpty() || state.recipientAddress.isNotBlank()
+        if (state.isReplyBlocked) {
+            ReplyBlockedBanner(unapproved = state.unapprovedParticipantLabels)
+        } else {
+            InputBar(
+                text = state.inputText,
+                onTextChange = vm::onInputChange,
+                onSend = vm::sendMessage,
+                onAttach = { photoPicker.launch("image/*") },
+                isSending = state.isSending,
+                tokensExhausted = state.tokensExhausted,
+                sendError = state.sendError,
+                attachedImageUri = state.attachedImageUri,
+                onClearAttachment = vm::clearAttachment,
+                isMms = state.attachedImageUri != null,
+                sendEnabled = state.selectedRecipients.isNotEmpty() || state.recipientAddress.isNotBlank()
+            )
+        }
+    }
+}
+
+@Composable
+private fun ReplyBlockedBanner(unapproved: List<String>) {
+    val who = when (unapproved.size) {
+        0 -> "someone in this group"
+        1 -> unapproved.first()
+        else -> unapproved.take(2).joinToString(" and ") +
+            if (unapproved.size > 2) " and ${unapproved.size - 2} more" else ""
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(
+                WindowInsets.ime.union(WindowInsets.navigationBars)
+            )
+            .background(Color(0xFF13131F))
+            .padding(horizontal = 20.dp, vertical = 14.dp)
+    ) {
+        Text(
+            text = "replies paused",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = WarningAmber
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "you can read this group, but you can't reply until your parent approves $who.",
+            fontSize = 13.sp,
+            color = OnNight.copy(alpha = 0.75f),
+            lineHeight = 18.sp
         )
     }
 }
@@ -599,7 +645,8 @@ private fun ChatTopBar(
     displayName: String,
     onBack: () -> Unit,
     onCall: () -> Unit = {},
-    callEnabled: Boolean = true
+    callEnabled: Boolean = true,
+    isGroup: Boolean = false
 ) {
     Row(
         modifier = Modifier
@@ -624,12 +671,21 @@ private fun ChatTopBar(
                 .background(avatarColor.copy(alpha = 0.25f)),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = initial,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-                color = avatarColor
-            )
+            if (isGroup) {
+                Icon(
+                    imageVector = Icons.Default.Group,
+                    contentDescription = null,
+                    tint = avatarColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            } else {
+                Text(
+                    text = initial,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = avatarColor
+                )
+            }
         }
 
         Spacer(Modifier.width(10.dp))

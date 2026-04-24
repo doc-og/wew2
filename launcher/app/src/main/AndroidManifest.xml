@@ -194,6 +194,28 @@
             </intent-filter>
         </service>
 
+        <!-- ─────────────────────────────────────────────────
+             FileProvider for outbound MMS PDUs. The system MMS/phone
+             service reads the PDU via this content:// URI with a
+             temporary read grant (SmsRepository.sendMms). Without this,
+             sendMultimediaMessage silently fails because our cache dir
+             is not readable by the phone process UID.
+             ───────────────────────────────────────────────── -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.mmsprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/mms_file_paths" />
+        </provider>
+
+        <!-- MMS send-status broadcast receiver (PendingIntent target). -->
+        <receiver
+            android:name=".sms.MmsSendStatusReceiver"
+            android:exported="false" />
+
         <!-- Firebase messaging -->
         <service
             android:name=".service.WewFirebaseMessagingService"

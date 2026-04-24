@@ -23,7 +23,11 @@ data class SmsThread(
     /** True if at least one participant is the parent. */
     val isParent: Boolean = false,
     val isPinned: Boolean = false,
-    val isMuted: Boolean = false
+    val isMuted: Boolean = false,
+    /** Raw phone numbers for every non-self participant resolved from the provider. */
+    val participants: List<String> = emptyList(),
+    /** True when the thread has 2+ remote participants (i.e. a group chat). */
+    val isGroup: Boolean = false
 )
 
 /** A single SMS or MMS message within a thread. */

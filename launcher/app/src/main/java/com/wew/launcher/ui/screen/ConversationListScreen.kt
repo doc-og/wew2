@@ -6,6 +6,7 @@ import android.os.Build
 import android.util.Log
 import android.telephony.SmsManager
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -35,9 +36,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MarkEmailRead
+import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NotificationsOff
-import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -85,7 +89,7 @@ import java.util.Locale
 @Composable
 fun ConversationListScreen(
     viewModel: ConversationListViewModel,
-    onOpenThread: (threadId: Long, address: String, displayName: String) -> Unit,
+    onOpenThread: (ConversationItem) -> Unit,
     onOpenNewCompose: () -> Unit,
     onOpenContacts: () -> Unit,
     onOpenCheckIn: () -> Unit,
@@ -187,37 +191,21 @@ fun ConversationListScreen(
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = BrandViolet)
                 }
-            } else if (state.pinned.isEmpty() && state.conversations.isEmpty()) {
+            } else if (state.conversations.isEmpty()) {
                 EmptyState()
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(bottom = 80.dp)
                 ) {
-                    // Pinned section
-                    if (state.pinned.isNotEmpty()) {
-                        item {
-                            SectionLabel("Pinned")
-                        }
-                        items(state.pinned, key = { it.thread.threadId }) { item ->
-                            ThreadRow(
-                                item = item,
-                                onClick = { onOpenThread(item.thread.threadId, item.thread.address, item.resolvedName) },
-                                onLongPress = { viewModel.onLongPress(item) }
-                            )
-                        }
-                        item { SectionDivider() }
-                    }
-
-                    // All other conversations
                     items(state.conversations, key = { it.thread.threadId }) { item ->
-                        ThreadRow(
+                        SwipeableThreadRow(
                             item = item,
-                            onClick = { onOpenThread(item.thread.threadId, item.thread.address, item.resolvedName) },
-                            onLongPress = { viewModel.onLongPress(item) }
+                            onClick = { onOpenThread(item) },
+                            onLongPress = { viewModel.onLongPress(item) },
+                            onToggleRead = { viewModel.toggleReadState(item) }
                         )
                     }
-
                 }
             }
         }
@@ -238,12 +226,7 @@ fun ConversationListScreen(
             onDismissRequest = { viewModel.dismissContextMenu() },
             modifier = Modifier.background(Color(0xFF1E1E2E))
         ) {
-            val pinLabel = if (target.isPinned) "Unpin" else "Pin"
             val muteLabel = if (target.isMuted) "Unmute" else "Mute"
-            ContextMenuItem(pinLabel) {
-                if (target.isPinned) viewModel.unpinThread(target)
-                else viewModel.pinThread(target)
-            }
             ContextMenuItem(muteLabel) {
                 if (target.isMuted) viewModel.unmuteThread(target)
                 else viewModel.muteThread(target)
@@ -336,7 +319,14 @@ private fun TopBar(
 
 @Composable
 private fun TokenChip(tokens: Int, daily: Int) {
-    val low = tokens < (daily * 0.2f)
+    // Animate the displayed balance so the chip ticks smoothly between polls instead
+    // of jumping in big chunks — makes the drain visible to the child in real time.
+    val animatedTokens by animateIntAsState(
+        targetValue = tokens,
+        animationSpec = tween(durationMillis = 600),
+        label = "tokenCountdown"
+    )
+    val low = animatedTokens < (daily * 0.2f)
     // High-contrast chip on dark background (WCAG AA–oriented)
     val bg = Color(0xFFF5F3FF)
     val fg = Color(0xFF1A1A2E)
@@ -345,7 +335,7 @@ private fun TokenChip(tokens: Int, daily: Int) {
         modifier = Modifier
             .semantics {
                 contentDescription =
-                    "tokens remaining: ${formatTokens(tokens)} of ${formatTokens(daily)} daily budget"
+                    "tokens remaining: ${formatTokens(animatedTokens)} of ${formatTokens(daily)} daily budget"
             }
             .clip(RoundedCornerShape(20.dp))
             .background(bg)
@@ -363,7 +353,7 @@ private fun TokenChip(tokens: Int, daily: Int) {
             Spacer(Modifier.width(6.dp))
         }
         Text(
-            text = formatTokens(tokens),
+            text = formatTokens(animatedTokens),
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold,
             color = fg
@@ -378,6 +368,80 @@ private fun formatTokens(n: Int): String = when {
 
 // ── Thread row ────────────────────────────────────────────────────────────────
 
+/**
+ * Thread row wrapped with an iOS-style left-to-right swipe that toggles the
+ * thread's read/unread state. The row snaps back after the gesture fires so it
+ * stays in the list. Long-press still opens the context menu for destructive
+ * actions (Mute, Mark as read, Delete).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableThreadRow(
+    item: ConversationItem,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit,
+    onToggleRead: () -> Unit
+) {
+    val isUnread = item.thread.unreadCount > 0
+    // Key by thread id so the swipe state resets if a different thread ever
+    // recycles into this list slot.
+    val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd) {
+                onToggleRead()
+            }
+            // Never actually dismiss: we fire the side effect and let the row
+            // animate back to its resting position.
+            false
+        },
+        positionalThreshold = { distance -> distance * 0.30f }
+    )
+
+    androidx.compose.material3.SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = true,
+        enableDismissFromEndToStart = false,
+        backgroundContent = { SwipeToggleReadBackground(showsMarkRead = isUnread) }
+    ) {
+        ThreadRow(
+            item = item,
+            onClick = onClick,
+            onLongPress = onLongPress
+        )
+    }
+}
+
+/**
+ * Background revealed behind the thread row during a left→right swipe. Shows a
+ * "mark read" icon on unread threads and a "mark unread" icon on read threads
+ * so the action's effect is clear before the user releases.
+ */
+@Composable
+private fun SwipeToggleReadBackground(showsMarkRead: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(BrandViolet)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Start
+    ) {
+        Icon(
+            imageVector = if (showsMarkRead) Icons.Default.MarkEmailRead else Icons.Default.MarkEmailUnread,
+            contentDescription = if (showsMarkRead) "mark as read" else "mark as unread",
+            tint = Color.White,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = if (showsMarkRead) "Read" else "Unread",
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ThreadRow(
@@ -385,9 +449,13 @@ private fun ThreadRow(
     onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
+    // The row must be fully opaque so it fully covers the SwipeToDismissBox
+    // background at rest — otherwise the violet "mark read" bar bleeds through
+    // even when the user isn't swiping.
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(Night)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongPress
@@ -395,8 +463,26 @@ private fun ThreadRow(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Avatar
-        ContactAvatar(name = item.resolvedName, color = item.avatarColor, isParent = item.isParent)
+        // iOS-style unread indicator: small dot to the left of the avatar. Always
+        // reserves the same 10dp of width so avatars line up whether or not the
+        // thread is unread.
+        Box(
+            modifier = Modifier.width(10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (item.thread.unreadCount > 0) {
+                UnreadDot()
+            }
+        }
+
+        Spacer(Modifier.width(6.dp))
+
+        ContactAvatar(
+            name = item.resolvedName,
+            color = item.avatarColor,
+            isParent = item.isParent,
+            isGroup = item.isGroup
+        )
 
         Spacer(Modifier.width(12.dp))
 
@@ -417,12 +503,21 @@ private fun ThreadRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-                    if (item.isPinned) {
+                    if (item.isGroup) {
                         Spacer(Modifier.width(4.dp))
                         Icon(
-                            Icons.Default.PushPin,
-                            contentDescription = null,
-                            tint = BrandViolet.copy(alpha = 0.7f),
+                            Icons.Default.Group,
+                            contentDescription = "group conversation",
+                            tint = OnNight.copy(alpha = 0.55f),
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                    if (item.isReplyBlocked) {
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = "reply blocked until everyone is approved",
+                            tint = WarningAmber,
                             modifier = Modifier.size(12.dp)
                         )
                     }
@@ -445,30 +540,33 @@ private fun ThreadRow(
 
             Spacer(Modifier.height(2.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = item.thread.snippet,
-                    fontSize = 14.sp,
-                    color = if (item.thread.unreadCount > 0) OnNight else OnNight.copy(alpha = 0.55f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                if (item.thread.unreadCount > 0) {
-                    Spacer(Modifier.width(8.dp))
-                    UnreadBadge(count = item.thread.unreadCount)
-                }
-            }
+            Text(
+                text = if (item.isReplyBlocked) {
+                    "waiting for parent to approve ${item.unapprovedParticipantLabels.joinToString(", ")}"
+                } else {
+                    item.thread.snippet
+                },
+                fontSize = 14.sp,
+                color = when {
+                    item.isReplyBlocked -> WarningAmber
+                    item.thread.unreadCount > 0 -> OnNight
+                    else -> OnNight.copy(alpha = 0.55f)
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
 
 @Composable
-private fun ContactAvatar(name: String, color: Color, isParent: Boolean) {
+private fun ContactAvatar(
+    name: String,
+    color: Color,
+    isParent: Boolean,
+    isGroup: Boolean = false
+) {
     Box(
         modifier = Modifier
             .size(48.dp)
@@ -476,57 +574,32 @@ private fun ContactAvatar(name: String, color: Color, isParent: Boolean) {
             .background(if (isParent) BrandViolet else color.copy(alpha = 0.25f)),
         contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (isParent) Color.White else color
-        )
+        if (isGroup && !isParent) {
+            Icon(
+                imageVector = Icons.Default.Group,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(22.dp)
+            )
+        } else {
+            Text(
+                text = name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (isParent) Color.White else color
+            )
+        }
     }
 }
 
 @Composable
-private fun UnreadBadge(count: Int) {
+private fun UnreadDot() {
     Box(
         modifier = Modifier
-            .size(if (count > 9) 22.dp else 18.dp)
+            .size(10.dp)
             .clip(CircleShape)
-            .background(BrandViolet),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = if (count > 99) "99+" else count.toString(),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-        )
-    }
-}
-
-// ── Section helpers ───────────────────────────────────────────────────────────
-
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text.uppercase(),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = OnNight.copy(alpha = 0.45f),
-        letterSpacing = 1.sp,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(BrandViolet)
     )
-}
-
-@Composable
-private fun SectionDivider() {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .padding(horizontal = 16.dp)
-            .background(OnNight.copy(alpha = 0.08f))
-    )
-    Spacer(Modifier.height(8.dp))
 }
 
 @Composable

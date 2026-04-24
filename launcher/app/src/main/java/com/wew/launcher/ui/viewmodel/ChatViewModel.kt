@@ -73,8 +73,18 @@ data class ChatUiState(
     /** URI to display in the full-screen image viewer; null = viewer closed. */
     val fullScreenImageUri: String? = null,
     /** Shown above the composer when sending fails or setup is incomplete. */
-    val sendError: String? = null
-)
+    val sendError: String? = null,
+    /** True when this conversation has 2+ remote participants (group chat). */
+    val isGroup: Boolean = false,
+    /**
+     * Participant labels still awaiting parent approval. Non-empty means the
+     * child can read the thread but can't reply until the parent approves them.
+     */
+    val unapprovedParticipantLabels: List<String> = emptyList()
+) {
+    /** Composer is disabled for mixed-approval group threads. */
+    val isReplyBlocked: Boolean get() = unapprovedParticipantLabels.isNotEmpty()
+}
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
 
@@ -84,7 +94,16 @@ class ChatViewModel(
     private val recipientAddress: String,
     recipientName: String,
     private val mergeSystemSummaries: Boolean,
-    initialRecipients: List<com.wew.launcher.data.model.WewContact> = emptyList()
+    initialRecipients: List<com.wew.launcher.data.model.WewContact> = emptyList(),
+    /** Preload state for threads opened from the conversation list. */
+    initialIsGroup: Boolean = false,
+    initialUnapprovedParticipantLabels: List<String> = emptyList(),
+    /**
+     * Raw phone addresses for every remote participant in this thread, sourced
+     * from the conversation list. Non-empty only when opening an existing thread
+     * (not compose mode). Used as the primary send target list for group replies.
+     */
+    private val initialRecipientAddresses: List<String> = emptyList()
 ) : AndroidViewModel(application) {
 
     private val repo = DeviceRepository(application)
@@ -112,7 +131,9 @@ class ChatViewModel(
                         .ifEmpty { recipientAddress }
                 else -> recipientAddress
             },
-            selectedRecipients = initialRecipients
+            selectedRecipients = initialRecipients,
+            isGroup = initialIsGroup || initialRecipients.size > 1,
+            unapprovedParticipantLabels = initialUnapprovedParticipantLabels
         )
     )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -120,6 +141,22 @@ class ChatViewModel(
     init {
         load()
         observeLive()
+        markCurrentThreadRead()
+    }
+
+    /**
+     * Marks the open thread as read in the SMS provider so the conversation list
+     * immediately reflects that the user has seen it. Safe to call even if the
+     * thread id is -1 (compose mode): we no-op. Triggering the content observer
+     * refreshes the conversation list automatically.
+     */
+    private fun markCurrentThreadRead() {
+        val tid = currentThreadId
+        if (tid == -1L) return
+        viewModelScope.launch {
+            runCatching { smsRepo.markThreadRead(tid) }
+                .onFailure { Log.w("ChatVM", "markThreadRead failed: ${it.message}") }
+        }
     }
 
     override fun onCleared() {
@@ -208,6 +245,7 @@ class ChatViewModel(
                 runCatching {
                     val items = buildChatItems(deviceId)
                     _uiState.update { s -> s.copy(chatItems = items) }
+                    markCurrentThreadRead()
                 }.onFailure { Log.w("ChatVM", "live refresh failed: ${it.message}") }
             }
         }
@@ -268,31 +306,34 @@ class ChatViewModel(
         val text = state.inputText.trim()
         val hasImage = state.attachedImageUri != null
         if ((text.isEmpty() && !hasImage) || state.isSending || state.tokensExhausted) return
+        if (state.isReplyBlocked) {
+            _uiState.update { it.copy(sendError = replyBlockedMessage(state.unapprovedParticipantLabels)) }
+            return
+        }
         val deviceId = prefs.getString("device_id", null) ?: return
 
-        val targets = if (state.selectedRecipients.isNotEmpty()) {
-            state.selectedRecipients.mapNotNull { it.phone?.trim()?.takeIf { p -> p.isNotEmpty() } }
-        } else {
-            listOf(recipientAddress.trim()).filter { it.isNotEmpty() }
+        // Seed with whatever is in-memory; we may refine below using the provider.
+        // Priority: compose-mode contacts → conversation-list participants → raw
+        // recipientAddress (which may be comma-separated for group threads).
+        val seedTargets: List<String> = when {
+            state.selectedRecipients.isNotEmpty() ->
+                state.selectedRecipients
+                    .mapNotNull { it.phone?.trim()?.takeIf { p -> p.isNotEmpty() } }
+            initialRecipientAddresses.isNotEmpty() ->
+                initialRecipientAddresses
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+            else -> recipientAddress
+                .split(',', ';')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
         }
-        if (targets.isEmpty()) return
 
         if (!MessagingCapability.canSendAndReceiveSms(getApplication())) {
             _uiState.update { it.copy(sendError = smsSendPreconditionMessage()) }
             return
         }
 
-        val isMms = hasImage
-        val perMsgCost = TokenEngine.calculateCost(
-            if (isMms) ActionType.MMS_SENT else ActionType.SMS_SENT
-        )
-        val totalCost = perMsgCost * targets.size
-        if (state.currentTokens < totalCost) {
-            _uiState.update { it.copy(tokensExhausted = true) }
-            return
-        }
-
-        val actionType = if (isMms) ActionType.MMS_SENT.value else ActionType.SMS_SENT.value
         val stagedAttach = state.attachedImageUri
         val stagedMime = state.attachedImageMime
 
@@ -301,8 +342,47 @@ class ChatViewModel(
         }
 
         viewModelScope.launch {
+            // Existing thread: route through every participant so group replies
+            // land in the same thread instead of forking into 1:1s.
+            val targets: List<String> = if (seedTargets.size > 1) {
+                seedTargets
+            } else if (currentThreadId != -1L) {
+                val fromThread = smsRepo.getParticipantAddressesForThread(currentThreadId)
+                    .filterNot { com.wew.launcher.telecom.DeviceLine.isLikelyOwnNumber(getApplication(), it) }
+                    .toList()
+                if (fromThread.size > 1) fromThread else seedTargets
+            } else {
+                seedTargets
+            }
+
+            if (targets.isEmpty()) {
+                _uiState.update { it.copy(isSending = false, inputText = text, attachedImageUri = stagedAttach) }
+                return@launch
+            }
+
+            val isGroupSend = targets.size > 1
+            val isMms = hasImage || isGroupSend
+            val perMsgCost = TokenEngine.calculateCost(
+                if (isMms) ActionType.MMS_SENT else ActionType.SMS_SENT
+            )
+            // Group MMS is billed once per message, not once per recipient.
+            val totalCost = if (isGroupSend) perMsgCost else perMsgCost * targets.size
+            if (state.currentTokens < totalCost) {
+                _uiState.update {
+                    it.copy(
+                        isSending = false,
+                        inputText = text,
+                        attachedImageUri = stagedAttach,
+                        tokensExhausted = true
+                    )
+                }
+                return@launch
+            }
+
+            val actionType = if (isMms) ActionType.MMS_SENT.value else ActionType.SMS_SENT.value
+
             var sendFailed: String? = null
-            for (to in targets) {
+            if (isGroupSend) {
                 val tokenResult = repo.consumeTokens(
                     deviceId = deviceId,
                     amount = perMsgCost,
@@ -321,22 +401,55 @@ class ChatViewModel(
                     }
                     return@launch
                 }
-                val sendResult = if (isMms) {
-                    smsRepo.sendMms(
-                        to = to,
-                        body = text,
-                        imageUri = stagedAttach,
-                        imageMimeType = stagedMime
-                    )
-                } else {
-                    smsRepo.sendSms(to = to, body = text)
-                }
+                val sendResult = smsRepo.sendMms(
+                    to = targets,
+                    body = text,
+                    imageUri = stagedAttach,
+                    imageMimeType = stagedMime
+                )
                 if (sendResult.isFailure) {
-                    repo.addTokens(deviceId, perMsgCost, "sms_send_failed_refund")
+                    repo.addTokens(deviceId, perMsgCost, "mms_send_failed_refund")
                     sendFailed = userMessageForSmsSendFailure(
                         sendResult.exceptionOrNull() ?: IllegalStateException("send failed")
                     )
-                    break
+                }
+            } else {
+                for (to in targets) {
+                    val tokenResult = repo.consumeTokens(
+                        deviceId = deviceId,
+                        amount = perMsgCost,
+                        actionType = actionType,
+                        appPackage = null,
+                        appName = "Messages"
+                    )
+                    if (tokenResult.isFailure) {
+                        _uiState.update {
+                            it.copy(
+                                isSending = false,
+                                inputText = text,
+                                attachedImageUri = stagedAttach,
+                                tokensExhausted = true
+                            )
+                        }
+                        return@launch
+                    }
+                    val sendResult = if (isMms) {
+                        smsRepo.sendMms(
+                            to = to,
+                            body = text,
+                            imageUri = stagedAttach,
+                            imageMimeType = stagedMime
+                        )
+                    } else {
+                        smsRepo.sendSms(to = to, body = text)
+                    }
+                    if (sendResult.isFailure) {
+                        repo.addTokens(deviceId, perMsgCost, "sms_send_failed_refund")
+                        sendFailed = userMessageForSmsSendFailure(
+                            sendResult.exceptionOrNull() ?: IllegalStateException("send failed")
+                        )
+                        break
+                    }
                 }
             }
 
@@ -356,9 +469,12 @@ class ChatViewModel(
             // Resolve thread with the same heuristics as the conversation list, then poll briefly.
             delay(80)
             if (currentThreadId == -1L && targets.isNotEmpty()) {
-                val targetPhone = targets.first()
                 repeat(24) {
-                    val tid = smsRepo.resolveThreadIdForContact(targetPhone)
+                    val tid = if (isGroupSend) {
+                        smsRepo.resolveThreadIdForRecipients(targets)
+                    } else {
+                        smsRepo.resolveThreadIdForContact(targets.first())
+                    }
                     if (tid != -1L) {
                         currentThreadId = tid
                         return@repeat
@@ -474,7 +590,10 @@ class ChatViewModel(
             recipientAddress: String,
             recipientName: String,
             mergeSystemSummaries: Boolean,
-            initialRecipients: List<com.wew.launcher.data.model.WewContact> = emptyList()
+            initialRecipients: List<com.wew.launcher.data.model.WewContact> = emptyList(),
+            initialIsGroup: Boolean = false,
+            initialUnapprovedParticipantLabels: List<String> = emptyList(),
+            initialRecipientAddresses: List<String> = emptyList()
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
@@ -484,8 +603,25 @@ class ChatViewModel(
                     recipientAddress,
                     recipientName,
                     mergeSystemSummaries,
-                    initialRecipients
+                    initialRecipients,
+                    initialIsGroup,
+                    initialUnapprovedParticipantLabels,
+                    initialRecipientAddresses
                 ) as T
         }
     }
+}
+
+/**
+ * Plain-English explanation shown above the composer when the child can read a
+ * group but can't reply because some participants are still unapproved.
+ */
+private fun replyBlockedMessage(unapproved: List<String>): String {
+    val who = when (unapproved.size) {
+        0 -> "someone in this group"
+        1 -> unapproved.first()
+        else -> unapproved.take(2).joinToString(" and ") +
+            if (unapproved.size > 2) " and ${unapproved.size - 2} more" else ""
+    }
+    return "you can't reply here yet — ask your parent to approve $who."
 }

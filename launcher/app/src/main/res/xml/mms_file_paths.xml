@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider roots for exposing outbound MMS PDU bytes to the system MMS
+    service. The phone/MMS process reads the PDU via a content:// URI with
+    a temporary grant (FLAG_GRANT_READ_URI_PERMISSION), so it must resolve to
+    a file inside one of these declared paths.
+-->
+<paths>
+    <cache-path name="mms_out" path="mms_out/" />
+</paths>

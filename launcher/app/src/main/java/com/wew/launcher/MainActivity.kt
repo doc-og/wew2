@@ -60,7 +60,15 @@ private sealed class WewScreen {
         val displayName: String,
         val isNewCompose: Boolean = false,
         /** Bumps each time user opens new compose so ChatViewModel state resets. */
-        val composeSession: Int = 0
+        val composeSession: Int = 0,
+        /** True when the thread has 2+ remote participants. */
+        val isGroup: Boolean = false,
+        /** Participant labels still awaiting parent approval; non-empty blocks replies. */
+        val unapprovedParticipantLabels: List<String> = emptyList(),
+        /** Raw phone addresses for every remote participant; used as reply targets. */
+        val participantAddresses: List<String> = emptyList(),
+        /** True when this thread is the WeW Parent thread (drives server system summaries). */
+        val isParent: Boolean = false
     ) : WewScreen()
     data class Web(val url: String) : WewScreen()
     object Map : WewScreen()
@@ -173,8 +181,17 @@ class MainActivity : ComponentActivity() {
                                 is WewScreen.ConversationList -> {
                                     ConversationListScreen(
                                         viewModel = convListViewModel,
-                                        onOpenThread = { threadId, address, displayName ->
-                                            screen = WewScreen.Chat(threadId, address, displayName, isNewCompose = false)
+                                        onOpenThread = { item ->
+                                            screen = WewScreen.Chat(
+                                                threadId = item.thread.threadId,
+                                                address = item.thread.address,
+                                                displayName = item.resolvedName,
+                                                isNewCompose = false,
+                                                isGroup = item.isGroup,
+                                                unapprovedParticipantLabels = item.unapprovedParticipantLabels,
+                                                participantAddresses = item.participantAddresses,
+                                                isParent = item.isParent
+                                            )
                                         },
                                         onOpenNewCompose = {
                                             convListViewModel.load()
@@ -236,13 +253,16 @@ class MainActivity : ComponentActivity() {
                                         threadId = s.threadId,
                                         recipientAddress = s.address,
                                         displayName = s.displayName,
-                                        mergeSystemSummaries = !s.isNewCompose && s.displayName == "WeW Parent",
+                                        mergeSystemSummaries = !s.isNewCompose && s.isParent,
                                         composeSession = s.composeSession,
                                         conversationListViewModel = if (s.isNewCompose) {
                                             convListViewModel
                                         } else {
                                             null
                                         },
+                                        isGroup = s.isGroup,
+                                        unapprovedParticipantLabels = s.unapprovedParticipantLabels,
+                                        participantAddresses = s.participantAddresses,
                                         onBack = { screen = WewScreen.ConversationList },
                                         onOpenUrl = { url -> screen = WewScreen.Web(url) }
                                     )

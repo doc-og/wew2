@@ -49,13 +49,25 @@ data class ConversationItem(
     val isApproved: Boolean = false,
     /** True if this is the WeW Parent thread. */
     val isParent: Boolean = false,
-    val isPinned: Boolean = false,
     val isMuted: Boolean = false,
-    val avatarColor: Color = Color(0xFF6B4EFF)
-)
+    val avatarColor: Color = Color(0xFF6B4EFF),
+    /** True when this thread has 2+ remote participants. */
+    val isGroup: Boolean = false,
+    /**
+     * Display labels (contact name or formatted phone) for participants that are
+     * not yet approved by the parent. Non-empty only when the group has at least
+     * one approved contact and at least one stranger — the child can still read
+     * the conversation but can't reply until the parent approves everyone.
+     */
+    val unapprovedParticipantLabels: List<String> = emptyList(),
+    /** Comma-separated raw phone addresses for every remote participant in the thread. */
+    val participantAddresses: List<String> = emptyList()
+) {
+    /** True when the child can read the thread but not reply to it (mixed approval). */
+    val isReplyBlocked: Boolean get() = unapprovedParticipantLabels.isNotEmpty()
+}
 
 data class ConversationListUiState(
-    val pinned: List<ConversationItem> = emptyList(),
     val conversations: List<ConversationItem> = emptyList(),
     /** Count of threads removed as unapproved (informational; list is purged from device). */
     val quarantineCount: Int = 0,
@@ -118,6 +130,38 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         load()
         observeSmsChanges()
         startApprovedAppsPolling()
+        startTokenBalancePolling()
+    }
+
+    /**
+     * Real-time token counter: re-reads `devices.current_tokens` / `daily_token_budget` every
+     * TOKEN_POLL_INTERVAL_MS so the child sees the balance drain as the foreground service
+     * deducts tokens for media, app opens, etc. Cheap — a single Supabase select — and scoped
+     * to only the token fields so the conversation list doesn't re-render.
+     */
+    private fun startTokenBalancePolling() {
+        viewModelScope.launch {
+            while (true) {
+                delay(TOKEN_POLL_INTERVAL_MS)
+                val deviceId = prefs.getString("device_id", null) ?: continue
+                if (deviceId.isBlank()) continue
+                runCatching { repo.getDevice(deviceId) }
+                    .onSuccess { device ->
+                        _uiState.update { s ->
+                            // Only touch token fields; ignore if nothing changed.
+                            if (s.currentTokens == device.currentTokens &&
+                                s.dailyTokenBudget == device.dailyTokenBudget &&
+                                s.tokensExhausted == (device.currentTokens <= 0)
+                            ) s else s.copy(
+                                currentTokens = device.currentTokens,
+                                dailyTokenBudget = device.dailyTokenBudget,
+                                tokensExhausted = device.currentTokens <= 0
+                            )
+                        }
+                    }
+                    .onFailure { Log.w("ConvListVM", "token poll failed: ${it.message}") }
+            }
+        }
     }
 
     /**
@@ -164,7 +208,6 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
             _uiState.update {
                 it.copy(
                     isLoading = false,
-                    pinned = emptyList(),
                     conversations = emptyList(),
                     deviceId = ""
                 )
@@ -181,7 +224,6 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 Log.e("ConvListVM", "load failed: ${it.message}")
                 _uiState.update { s ->
                     s.copy(
-                        pinned = emptyList(),
                         conversations = emptyList(),
                         quarantineCount = 0,
                         isLoading = false
@@ -214,27 +256,30 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         var threads = smsRepo.getThreads()
         var participantRaw = resolveParticipantRaw(threads, parentPhone, approvedContacts)
         var items = buildConversationItems(
-            threads, approvedContacts, parentPhone, metaByThread, participantRaw
+            threads, approvedContacts, parentPhone, parentName, metaByThread, participantRaw
         )
+        // Purge only pure-stranger threads (no approved participants at all). Group
+        // threads that mix approved contacts with unknowns are kept so the child
+        // can still read them — replying is blocked by ConversationItem.isReplyBlocked
+        // until the parent approves the remaining participants.
         var totalPurged = 0
         repeat(8) { pass ->
-            val quarantine = items.filter { !it.isApproved }
-            if (quarantine.isEmpty()) return@repeat
-            totalPurged += quarantine.size
-            Log.w("ConvListVM", "purging ${quarantine.size} unapproved thread(s), pass=$pass")
-            for (q in quarantine) {
+            val pureStranger = items.filter { !it.isApproved && !it.isReplyBlocked }
+            if (pureStranger.isEmpty()) return@repeat
+            totalPurged += pureStranger.size
+            Log.w("ConvListVM", "purging ${pureStranger.size} stranger thread(s), pass=$pass")
+            for (q in pureStranger) {
                 smsRepo.deleteThread(q.thread.threadId)
             }
             delay(120)
             threads = smsRepo.getThreads()
             participantRaw = resolveParticipantRaw(threads, parentPhone, approvedContacts)
             items = buildConversationItems(
-                threads, approvedContacts, parentPhone, metaByThread, participantRaw
+                threads, approvedContacts, parentPhone, parentName, metaByThread, participantRaw
             )
         }
 
-        val approvedOnly = items.filter { it.isApproved }
-        val (pinned, rest) = approvedOnly.partition { it.isPinned }
+        val visible = items.filter { it.isApproved || it.isReplyBlocked }
 
         val whitelistedRecords = repo.getWhitelistedApps(deviceId)
         val whitelistedPkgs = whitelistedRecords.map { it.packageName }.toSet()
@@ -242,7 +287,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         val weatherPkg = WEATHER_PACKAGES.firstOrNull { it in whitelistedPkgs }
         val approvedApps = buildApprovedApps(whitelistedRecords, calendarPkg, weatherPkg)
 
-        val parentItem = pinned.find { it.isParent }
+        val parentItem = visible.find { it.isParent }
         if (parentItem != null) {
             val localTid = parentItem.thread.threadId.toString()
             if (device.parentSmsThreadId != localTid) {
@@ -254,8 +299,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
         _uiState.update {
             it.copy(
-                pinned = pinned,
-                conversations = rest.sortedByDescending { c -> c.thread.date },
+                conversations = visible.sortedByDescending { c -> c.thread.date },
                 quarantineCount = totalPurged,
                 isLoading = false,
                 currentTokens = device.currentTokens,
@@ -351,6 +395,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         threads: List<SmsThread>,
         approvedContacts: List<WewContact>,
         parentPhone: String?,
+        parentName: String?,
         metaByThread: Map<String, ConversationMeta>,
         participantRawByThread: Map<Long, Set<String>>
     ): List<ConversationItem> {
@@ -368,40 +413,65 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 }
             }.distinctBy { it.id ?: it.phone }
 
-            val isApproved = remoteParties.isNotEmpty() &&
-                remoteParties.all { addr ->
-                    (parentPhone != null && PhoneMatch.sameSubscriber(parentPhone, addr)) ||
-                        approvedContacts.any { c ->
-                            c.phone != null && PhoneMatch.sameSubscriber(c.phone, addr)
-                        }
-                }
+            fun isApprovedAddr(addr: String): Boolean =
+                (parentPhone != null && PhoneMatch.sameSubscriber(parentPhone, addr)) ||
+                    approvedContacts.any { c ->
+                        c.phone != null && PhoneMatch.sameSubscriber(c.phone, addr)
+                    }
+
+            val approvedParties = remoteParties.filter { isApprovedAddr(it) }
+            val unapprovedParties = remoteParties.filter { !isApprovedAddr(it) }
+
+            val isApproved = remoteParties.isNotEmpty() && unapprovedParties.isEmpty()
+            // Group chat when there are 2+ distinct remote participants.
+            val isGroup = remoteParties.size > 1
+            // Keep a mixed-approval group visible to the child (reply-blocked) only
+            // when at least one participant is approved. Pure-stranger threads are
+            // still purged by the caller.
+            val unapprovedLabels = if (approvedParties.isNotEmpty() && unapprovedParties.isNotEmpty()) {
+                unapprovedParties.map { formatPhoneDisplay(it) }
+            } else {
+                emptyList()
+            }
 
             val isParent = parentPhone != null &&
                 remoteParties.size == 1 &&
                 PhoneMatch.sameSubscriber(remoteParties.first(), parentPhone)
 
+            val parentDisplayName = parentName?.takeIf { it.isNotBlank() }
+                ?: parentPhone?.let { formatPhoneDisplay(it) }
+                ?: "Parent"
             val displayName = when {
-                isParent -> "WeW Parent"
-                matchingContacts.size == 1 -> matchingContacts.first().name
-                matchingContacts.size > 1 ->
-                    matchingContacts.take(3).joinToString(", ") { it.name } +
-                        if (matchingContacts.size > 3) ", …" else ""
+                isParent -> parentDisplayName
+                matchingContacts.size == 1 && !isGroup -> matchingContacts.first().name
+                matchingContacts.size >= 1 && isGroup -> {
+                    val names = matchingContacts.map { it.name } +
+                        unapprovedParties.map { formatPhoneDisplay(it) }
+                    names.take(3).joinToString(", ") +
+                        if (names.size > 3) ", …" else ""
+                }
                 parentPhone != null && remoteParties.isNotEmpty() &&
-                    remoteParties.all { PhoneMatch.sameSubscriber(it, parentPhone) } -> "WeW Parent"
+                    remoteParties.all { PhoneMatch.sameSubscriber(it, parentPhone) } -> parentDisplayName
                 else -> formatPhoneDisplay(remoteParties.firstOrNull() ?: raw.firstOrNull() ?: thread.address)
             }
 
             val primaryContact = matchingContacts.firstOrNull()
             val meta = metaByThread[thread.threadId.toString()]
             ConversationItem(
-                thread = thread,
+                thread = thread.copy(
+                    participants = remoteParties,
+                    isGroup = isGroup,
+                    isApproved = isApproved
+                ),
                 resolvedName = displayName,
                 contact = primaryContact,
                 isApproved = isApproved,
                 isParent = isParent,
-                isPinned = meta?.isPinned ?: isParent,
                 isMuted = meta?.isMuted ?: false,
-                avatarColor = avatarColorFor(displayName)
+                avatarColor = avatarColorFor(displayName),
+                isGroup = isGroup,
+                unapprovedParticipantLabels = unapprovedLabels,
+                participantAddresses = remoteParties
             )
         }
     }
@@ -433,39 +503,6 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         _uiState.update { it.copy(contextMenuThread = null) }
     }
 
-    fun pinThread(item: ConversationItem) {
-        viewModelScope.launch {
-            val state = _uiState.value
-            val newMeta = ConversationMeta(
-                deviceId = state.deviceId,
-                threadId = item.thread.threadId.toString(),
-                displayName = item.resolvedName,
-                isPinned = true,
-                isMuted = item.isMuted
-            )
-            repo.upsertConversationMeta(newMeta)
-            dismissContextMenu()
-            load()
-        }
-    }
-
-    fun unpinThread(item: ConversationItem) {
-        viewModelScope.launch {
-            val state = _uiState.value
-            repo.upsertConversationMeta(
-                ConversationMeta(
-                    deviceId = state.deviceId,
-                    threadId = item.thread.threadId.toString(),
-                    displayName = item.resolvedName,
-                    isPinned = false,
-                    isMuted = item.isMuted
-                )
-            )
-            dismissContextMenu()
-            load()
-        }
-    }
-
     fun muteThread(item: ConversationItem) {
         viewModelScope.launch {
             val state = _uiState.value
@@ -474,7 +511,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                     deviceId = state.deviceId,
                     threadId = item.thread.threadId.toString(),
                     displayName = item.resolvedName,
-                    isPinned = item.isPinned,
+                    isPinned = false,
                     isMuted = true
                 )
             )
@@ -491,7 +528,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                     deviceId = state.deviceId,
                     threadId = item.thread.threadId.toString(),
                     displayName = item.resolvedName,
-                    isPinned = item.isPinned,
+                    isPinned = false,
                     isMuted = false
                 )
             )
@@ -504,6 +541,24 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         viewModelScope.launch {
             smsRepo.markThreadRead(item.thread.threadId)
             dismissContextMenu()
+            load()
+        }
+    }
+
+    /**
+     * Toggles the read state of [item] in response to a swipe gesture.
+     * Unread → read marks every unread row; read → unread flips only the most
+     * recent incoming SMS so the unread count becomes 1 (iOS-style).
+     */
+    fun toggleReadState(item: ConversationItem) {
+        viewModelScope.launch {
+            if (item.thread.unreadCount > 0) {
+                smsRepo.markThreadRead(item.thread.threadId)
+            } else {
+                smsRepo.markThreadUnread(item.thread.threadId)
+            }
+            // observeSmsChanges will refresh the list; load() keeps behaviour
+            // consistent if the observer is slow to fire on this OEM.
             load()
         }
     }
@@ -639,6 +694,13 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     companion object {
         /** How often to silently re-check the parent-approved app whitelist. */
         private const val APPROVED_APPS_POLL_MS = 15_000L
+
+        /**
+         * How often to re-read the device's token balance so the token chip updates in
+         * near-real-time as the foreground service deducts tokens. Kept short enough to
+         * feel live, but long enough to avoid thrashing Supabase from the child device.
+         */
+        private const val TOKEN_POLL_INTERVAL_MS = 2_000L
 
         val CALENDAR_PACKAGES = listOf(
             "com.google.android.calendar",

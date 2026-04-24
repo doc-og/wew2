@@ -1,5 +1,6 @@
 package com.wew.launcher.sms
 
+import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
 import android.database.ContentObserver
@@ -9,12 +10,14 @@ import android.os.Looper
 import android.provider.Telephony
 import android.telephony.SmsManager
 import android.util.Log
+import androidx.core.content.FileProvider
 import com.wew.launcher.telecom.PhoneMatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * SmsRepository — reads and writes SMS/MMS via Android's Telephony ContentProvider.
@@ -196,7 +199,36 @@ class SmsRepository(private val context: Context) {
         return parts
     }
 
+    /**
+     * MMS text parts can live in one of two places:
+     *
+     *  1. Inline in the `text` column of `content://mms/part/<id>` — this is how
+     *     short bodies are typically stored (and how WeW persists outgoing sends;
+     *     see [MmsSendStatusReceiver.persistSentMms]).
+     *  2. In a backing file referenced by `_data`, accessed via `openInputStream`
+     *     on the part URI — how AOSP's `PduPersister` tends to lay larger payloads
+     *     and what `MmsReceiver` produces for inbound text.
+     *
+     * Prefer (1) because it's one query with no SELinux-sensitive open. Fall back
+     * to (2) when the column is null/empty (e.g. for inbound bodies or when the
+     * row was persisted by another app).
+     */
     private fun readMmsPartText(contentUri: String): String {
+        val partId = Uri.parse(contentUri).lastPathSegment?.toLongOrNull()
+        if (partId != null) {
+            val inline = runCatching {
+                context.contentResolver.query(
+                    Uri.parse("content://mms/part"),
+                    arrayOf("text"),
+                    "_id = ?",
+                    arrayOf(partId.toString()),
+                    null
+                )?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            }.getOrNull()
+            if (!inline.isNullOrEmpty()) return inline
+        }
         return runCatching {
             context.contentResolver.openInputStream(Uri.parse(contentUri))
                 ?.bufferedReader()
@@ -216,6 +248,37 @@ class SmsRepository(private val context: Context) {
                 if (cursor.moveToFirst()) cursor.getString(0) else ""
             } ?: ""
         }.getOrElse { "" }
+    }
+
+    /**
+     * All addresses on an MMS row, spanning FROM / TO / CC / BCC. Used by
+     * [getParticipantAddressesForThread] so outgoing group MMS (where FROM is
+     * the device itself) still contributes the recipient list.
+     *
+     * PDU address types (see OMA-MMS-ENC):
+     *   130 = BCC, 137 = FROM, 151 = TO, 152 = CC
+     */
+    private fun getMmsAllAddresses(mmsId: Long): Set<String> {
+        val out = linkedSetOf<String>()
+        runCatching {
+            context.contentResolver.query(
+                Uri.parse("content://mms/$mmsId/addr"),
+                arrayOf("address", "type"),
+                "type IN (130, 137, 151, 152)",
+                null, null
+            )?.use { cursor ->
+                val addrIdx = cursor.getColumnIndex("address")
+                if (addrIdx >= 0) {
+                    while (cursor.moveToNext()) {
+                        cursor.getString(addrIdx)
+                            ?.trim()
+                            ?.takeIf { it.isNotBlank() && !it.equals("insert-address-token", ignoreCase = true) }
+                            ?.let { out.add(it) }
+                    }
+                }
+            }
+        }.onFailure { Log.w("SmsRepo", "getMmsAllAddresses failed: ${it.message}") }
+        return out
     }
 
     // ── Send ──────────────────────────────────────────────────────────────────
@@ -272,7 +335,11 @@ class SmsRepository(private val context: Context) {
     }
 
     /**
-     * Send an MMS with an optional single image attachment.
+     * Send an MMS with an optional single image attachment to one or more recipients.
+     *
+     * When [to] has more than one entry the PDU carries repeated HDR_TO fields,
+     * which is how group MMS is signalled — the telephony stack will produce a
+     * single MMS thread containing all recipients.
      *
      * Builds a WAP MMS m-send-req PDU via [MmsPduBuilder], writes it to a
      * cache temp file, and hands off to SmsManager which handles APN selection
@@ -283,12 +350,13 @@ class SmsRepository(private val context: Context) {
      */
     @Suppress("DEPRECATION")
     suspend fun sendMms(
-        to: String,
+        to: List<String>,
         body: String,
         imageUri: String? = null,
         imageMimeType: String = "image/jpeg"
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
+            require(to.isNotEmpty()) { "sendMms: at least one recipient required" }
             val imageBytes = imageUri?.let { readBytesFromUri(it) }
             val pdu = MmsPduBuilder.build(
                 to = to,
@@ -296,21 +364,66 @@ class SmsRepository(private val context: Context) {
                 imageBytes = imageBytes,
                 imageMimeType = imageMimeType
             )
-            Log.d("SmsRepo", "sendMms: PDU ${pdu.size} bytes, imageBytes=${imageBytes?.size ?: 0}")
+            Log.d(
+                "SmsRepo",
+                "sendMms: PDU ${pdu.size} bytes, recipients=${to.size}, imageBytes=${imageBytes?.size ?: 0}"
+            )
 
-            val tempFile = java.io.File(context.cacheDir, "mms_out_${System.currentTimeMillis()}.pdu")
+            // Write the PDU under cacheDir/mms_out/ so it matches the FileProvider
+            // paths declared in res/xml/mms_file_paths.xml. The phone/MMS service
+            // runs in a different UID and can only read this file via the
+            // FileProvider content URI below.
+            val outDir = File(context.cacheDir, "mms_out").apply { mkdirs() }
+            val tempFile = File(outDir, "mms_${System.currentTimeMillis()}.pdu")
             tempFile.writeBytes(pdu)
-            val tempUri = Uri.fromFile(tempFile)
+            val contentUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.mmsprovider",
+                tempFile
+            )
+
+            // A PendingIntent that SmsManager fires once transmission completes.
+            // Carries the PDU file path so the receiver can clean it up and log
+            // the result code — without this, MMS failures are invisible.
+            val flags = PendingIntent.FLAG_ONE_SHOT or
+                PendingIntent.FLAG_UPDATE_CURRENT or
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                    PendingIntent.FLAG_MUTABLE
+                } else {
+                    0
+                }
+            val sentIntent = PendingIntent.getBroadcast(
+                context,
+                (tempFile.name.hashCode() and 0x7fffffff),
+                MmsSendStatusReceiver.intent(
+                    context = context,
+                    pduPath = tempFile.absolutePath,
+                    recipients = to,
+                    body = body,
+                    imageUri = imageUri,
+                    imageMime = imageMimeType
+                ),
+                flags
+            )
 
             val smsManager = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
                 context.getSystemService(SmsManager::class.java)
             } else {
                 SmsManager.getDefault()
             }
-            smsManager.sendMultimediaMessage(context, tempUri, null, null, null)
+            smsManager.sendMultimediaMessage(context, contentUri, null, null, sentIntent)
+            Log.i("SmsRepo", "sendMms handed off to SmsManager: uri=$contentUri")
             Unit
-        }.onFailure { Log.e("SmsRepo", "sendMms failed: ${it.message}") }
+        }.onFailure { Log.e("SmsRepo", "sendMms failed: ${it.message}", it) }
     }
+
+    /** Single-recipient convenience overload kept for existing call sites. */
+    suspend fun sendMms(
+        to: String,
+        body: String,
+        imageUri: String? = null,
+        imageMimeType: String = "image/jpeg"
+    ): Result<Unit> = sendMms(listOf(to), body, imageUri, imageMimeType)
 
     /**
      * Read all bytes from a content:// or file:// URI.
@@ -338,6 +451,37 @@ class SmsRepository(private val context: Context) {
                 arrayOf(threadId.toString())
             )
         }.onFailure { Log.e("SmsRepo", "markThreadRead failed: ${it.message}") }
+    }
+
+    /**
+     * Marks the thread as unread by flipping READ=0 on the most recent incoming SMS
+     * row. We intentionally flip only the latest received message so the unread
+     * count rises to 1 (iOS-style) instead of re-surfacing every historical message.
+     * No-op if the thread has no incoming SMS rows (e.g. MMS-only) — matches the
+     * existing unread-count semantics which look only at SMS.
+     */
+    fun markThreadUnread(threadId: Long) {
+        runCatching {
+            val latestId = context.contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(Telephony.Sms._ID),
+                "${Telephony.Sms.THREAD_ID} = ? AND ${Telephony.Sms.TYPE} = ?",
+                arrayOf(threadId.toString(), Telephony.Sms.MESSAGE_TYPE_INBOX.toString()),
+                "${Telephony.Sms.DATE} DESC LIMIT 1"
+            )?.use { c ->
+                if (c.moveToFirst()) c.getLong(0) else null
+            }
+            if (latestId == null) {
+                Log.i("SmsRepo", "markThreadUnread: no incoming sms row for thread $threadId")
+                return@runCatching
+            }
+            context.contentResolver.update(
+                Telephony.Sms.CONTENT_URI,
+                ContentValues().apply { put(Telephony.Sms.READ, 0) },
+                "${Telephony.Sms._ID} = ?",
+                arrayOf(latestId.toString())
+            )
+        }.onFailure { Log.e("SmsRepo", "markThreadUnread failed: ${it.message}") }
     }
 
     /**
@@ -441,13 +585,35 @@ class SmsRepository(private val context: Context) {
             )?.use { c ->
                 val idx = c.getColumnIndexOrThrow(Telephony.Mms._ID)
                 while (c.moveToNext()) {
-                    getMmsSenderAddress(c.getLong(idx))
-                        .takeIf { it.isNotBlank() }
-                        ?.let { out.add(it) }
+                    // FROM + TO + CC + BCC. Outgoing MMS only has FROM = own number
+                    // plus TO/CC rows for the recipients; querying just FROM would
+                    // drop the recipients of a group the child initiated.
+                    out.addAll(getMmsAllAddresses(c.getLong(idx)))
                 }
             }
         }.onFailure { Log.e("SmsRepo", "getParticipantAddresses mms: ${it.message}") }
         out
+    }
+
+    /**
+     * Resolves the canonical thread_id for a recipient set via
+     * `content://mms-sms/threadID?recipient=…&recipient=…`. This is how Android
+     * identifies a group thread independent of which message went through first.
+     * Returns -1 when the provider can't resolve (older OS / empty list).
+     */
+    suspend fun resolveThreadIdForRecipients(phones: List<String>): Long = withContext(Dispatchers.IO) {
+        val clean = phones.map { it.trim() }.filter { it.isNotEmpty() }
+        if (clean.isEmpty()) return@withContext -1L
+        val builder = Uri.parse("content://mms-sms/threadID").buildUpon()
+        for (p in clean) builder.appendQueryParameter("recipient", p)
+        runCatching {
+            context.contentResolver.query(builder.build(), arrayOf("_id"), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getLong(0) else -1L
+            } ?: -1L
+        }.getOrElse {
+            Log.w("SmsRepo", "resolveThreadIdForRecipients failed: ${it.message}")
+            -1L
+        }
     }
 
     /**
