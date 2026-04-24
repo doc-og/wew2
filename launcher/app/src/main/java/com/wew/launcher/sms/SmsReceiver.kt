@@ -1,6 +1,7 @@
 package com.wew.launcher.sms
 
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
@@ -21,15 +22,20 @@ import kotlinx.coroutines.launch
  * which is only delivered to the default SMS app. This prevents duplicate
  * processing by other apps.
  *
+ * IMPORTANT: When an app is the default SMS app, Android does NOT auto-persist
+ * the incoming message to the SMS Provider — that is the default app's job.
+ * If we don't insert the row here, the message never appears in any SMS reader
+ * (including our own ConversationList / ChatScreen, which both query
+ * content://sms via [SmsRepository] and refresh on a ContentObserver).
+ *
  * On receipt:
  * 1. Reads message PDUs from the intent
- * 2. Logs metadata to Supabase (MessageLog mirror) for parent visibility
- * 3. Logs activity for token accounting
- * 4. Broadcasts a local intent so any open ChatScreen can refresh
+ * 2. Inserts the message into Telephony.Sms.Inbox (the canonical store)
+ * 3. Mirrors metadata to Supabase (MessageLog) for parent visibility
+ * 4. Logs activity for parent timeline
  *
  * Contact filtering (approved vs quarantine) is intentionally NOT done here —
- * the SMS is already written to the device DB by the time this receiver fires.
- * Filtering is applied in the ConversationList UI layer.
+ * filtering happens in the ConversationList UI layer once the row is visible.
  */
 class SmsReceiver : BroadcastReceiver() {
 
@@ -43,16 +49,39 @@ class SmsReceiver : BroadcastReceiver() {
 
         val senderAddress = messages.first().displayOriginatingAddress ?: return
         val body = messages.joinToString("") { it.messageBody ?: "" }
+        // Some carriers send 0 or wildly skewed timestamps; fall back to local time.
+        val networkTs = messages.first().timestampMillis
+        val timestamp = if (networkTs > 0L) networkTs else System.currentTimeMillis()
 
         Log.d("SmsReceiver", "Incoming SMS from $senderAddress (${body.length} chars)")
 
-        // Broadcast locally so any open UI can refresh its message list
-        context.sendBroadcast(Intent(ACTION_SMS_RECEIVED).apply {
-            setPackage(context.packageName)
-            putExtra(EXTRA_SENDER, senderAddress)
-        })
+        // Persist to the SMS Provider so the conversation list / chat / any other
+        // SMS reader on the device can see it. The ContentObserver in
+        // SmsRepository.observeSmsChanges() will fire on this insert and the UI
+        // will refresh automatically. thread_id is auto-resolved by the provider
+        // from `address`.
+        val values = ContentValues().apply {
+            put(Telephony.Sms.ADDRESS, senderAddress)
+            put(Telephony.Sms.BODY, body)
+            put(Telephony.Sms.DATE, timestamp)
+            put(Telephony.Sms.DATE_SENT, timestamp)
+            put(Telephony.Sms.READ, 0)
+            put(Telephony.Sms.SEEN, 0)
+            put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_INBOX)
+        }
+        val inboxUri = runCatching {
+            context.contentResolver.insert(Telephony.Sms.Inbox.CONTENT_URI, values)
+        }.onFailure {
+            Log.e("SmsReceiver", "Failed to insert inbox row (is WeW default SMS app?): ${it.message}")
+        }.getOrNull()
 
-        // Mirror metadata to Supabase async — fire and forget
+        if (inboxUri == null) {
+            // Without the inbox row the message is lost to the UI; bail before
+            // logging anything that would make it look like we received it.
+            return
+        }
+
+        // Mirror metadata to Supabase async — fire and forget.
         val prefs = context.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
         val deviceId = prefs.getString("device_id", null) ?: return
 
@@ -73,7 +102,7 @@ class SmsReceiver : BroadcastReceiver() {
                 repo.logActivity(
                     ActivityLog(
                         deviceId = deviceId,
-                        actionType = ActionType.SMS_SENT.value,   // reuse for received — parent sees both
+                        actionType = ActionType.SMS_RECEIVED.value,
                         appPackage = null,
                         appName = null,
                         tokensConsumed = 0
@@ -85,10 +114,5 @@ class SmsReceiver : BroadcastReceiver() {
 
     private fun resolveThreadId(context: Context, address: String): String {
         return SmsRepository(context).getThreadIdForAddress(address).toString()
-    }
-
-    companion object {
-        const val ACTION_SMS_RECEIVED = "com.wew.launcher.SMS_RECEIVED"
-        const val EXTRA_SENDER = "sender_address"
     }
 }

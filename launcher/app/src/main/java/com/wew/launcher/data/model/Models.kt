@@ -85,6 +85,7 @@ data class AppSyncRecord(
 enum class ActionType(val value: String) {
     // Messaging
     SMS_SENT("sms_sent"),
+    SMS_RECEIVED("sms_received"),
     MMS_SENT("mms_sent"),
     // Calls
     CALL_MADE("call_made"),
