@@ -395,6 +395,13 @@ data class MessageLog(
     @SerialName("has_media")       val hasMedia: Boolean          = false,
     @SerialName("thumbnail_url")   val thumbnailUrl: String?      = null,
     @SerialName("tokens_consumed") val tokensConsumed: Int        = 0,
+    /**
+     * Plain-text body of the message, if any. Mirrored so a row in content://sms
+     * that later gets lost/wiped can still be recovered (or at least read by the
+     * parent dashboard). Null for media-only MMS and for system rows that use
+     * [body] via the system-messages path.
+     */
+    val body: String? = null,
     @SerialName("created_at")      val createdAt: String?         = null
 )
 

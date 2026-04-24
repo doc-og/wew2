@@ -96,7 +96,8 @@ class SmsReceiver : BroadcastReceiver() {
                         senderType = "contact",
                         messageType = "text",
                         hasMedia = false,
-                        tokensConsumed = 0   // incoming messages don't cost tokens
+                        tokensConsumed = 0,   // incoming messages don't cost tokens
+                        body = body.ifBlank { null }
                     )
                 )
                 repo.logActivity(
