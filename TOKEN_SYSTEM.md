@@ -33,11 +33,13 @@ have no mechanical effect on the next day's budget.
 
 ## Budget Calibration Target
 
-The system is calibrated so that **~750 discrete actions exhaust the 10,000-token daily budget**,
-giving an effective average cost of ~13.3 tokens per action.
+The system is calibrated so that **~150 discrete actions exhaust the 10,000-token daily budget**,
+giving an effective average cost of ~66 tokens per action.
 
-750 actions represents roughly 25% of the average adult daily phone session, which is an
-appropriate ceiling for children aged 8–12 during parent-scheduled active hours.
+Costs were rebalanced to burn the daily budget roughly **5x faster** than the original calibration
+(which targeted ~750 actions). The new ceiling represents a tighter share of the average adult
+daily phone session — appropriate for children aged 8–12 during parent-scheduled active hours, and
+makes each action feel more consequential to the child.
 
 ---
 
@@ -48,12 +50,12 @@ Actions are grouped into tiers based on how much attention they capture. Passive
 behaviour. Active creation (messaging, photos) sits in the middle. Navigation sits at the bottom.
 
 ```
-Tier 0  — Free (0)          Safety events, SOS, check-ins, monitoring signals
-Tier 1  — Minimal (8–25)    Short web lookups, audio streaming, MMS
-Tier 2  — Standard (13–30)  App opens, SMS, web session entry
-Tier 3  — Significant (50–150)  Game sessions, photos, calls, social scrolling
-Tier 4  — High drain (150+ base + high/min)  Video watching, video calls
-Tier 5  — Privilege (500 flat)  Temporary access grants (bypass of an app block)
+Tier 0  — Free (0)                Safety events, SOS, check-ins, monitoring signals
+Tier 1  — Minimal (40–125)        Short web lookups, audio streaming, MMS
+Tier 2  — Standard (65–150)       App opens, SMS, web session entry
+Tier 3  — Significant (250–750)   Game sessions, photos, calls, social scrolling
+Tier 4  — High drain (750+ base + high/min)  Video watching, video calls
+Tier 5  — Privilege (2,500 flat)  Temporary access grants (bypass of an app block)
 ```
 
 ---
@@ -64,24 +66,24 @@ Tier 5  — Privilege (500 flat)  Temporary access grants (bypass of an app bloc
 
 | Action | Tokens | Notes |
 |---|---|---|
-| App open | 13 | Most frequent action; primary lever for hitting the 750-action target |
-| SMS sent | 10 | Active communication — lower cost than passive consumption |
-| MMS sent | 25 | Slightly above SMS; usually a photo attached to a message |
-| Photo taken | 50 | Creative/productive action; not penalised as heavily as passive media |
-| Temporary access granted | 500 | Intentionally high — this is a privilege bypass |
+| App open | 65 | Most frequent action; primary lever for hitting the 150-action target |
+| SMS sent | 50 | Active communication — lower cost than passive consumption |
+| MMS sent | 125 | Slightly above SMS; usually a photo attached to a message |
+| Photo taken | 250 | Creative/productive action; not penalised as heavily as passive media |
+| Temporary access granted | 2,500 | Intentionally high — this is a privilege bypass |
 
 ### Time-based actions (base + per-minute rate)
 
 | Action | Base | Per Minute | Example: 10 min | Example: 30 min |
 |---|---|---|---|---|
-| Web session | 30 | +20 | 230 | 630 |
-| Call received | 0 | +50 | 500 | 1,500 |
-| Call made | 100 | +50 | 600 | 1,600 |
-| Video call | 75 | +75 | 825 | 2,325 |
-| Audio streamed | 20 | +8 | 100 | 260 |
-| Game session | 75 | +40 | 475 | 1,275 |
-| Social scroll | 50 | +25 | 300 | 800 |
-| Video watched | 150 | +100 | 1,150 | 3,150 |
+| Web session | 150 | +100 | 1,150 | 3,150 |
+| Call received | 0 | +250 | 2,500 | 7,500 |
+| Call made | 500 | +250 | 3,000 | 8,000 |
+| Video call | 375 | +375 | 4,125 | 11,625 |
+| Audio streamed | 100 | +40 | 500 | 1,300 |
+| Game session | 375 | +200 | 2,375 | 6,375 |
+| Social scroll | 250 | +125 | 1,500 | 4,000 |
+| Video watched | 750 | +500 | 5,750 | 15,750 |
 
 ### Free actions (always 0 tokens)
 

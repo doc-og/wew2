@@ -5,6 +5,10 @@ import kotlin.math.max
 
 /**
  * TokenEngine — default costs match [TOKEN_SYSTEM.md] (parent overrides via token_action_costs).
+ *
+ * Costs were re-calibrated to burn the 10,000-token daily budget roughly 5x faster than the
+ * original table — target ~150 discrete actions/day instead of ~750. Free (safety) actions stay
+ * at 0; only billable costs are scaled. See TOKEN_SYSTEM.md for the full cost table.
  */
 object TokenEngine {
 
@@ -23,19 +27,19 @@ object TokenEngine {
     )
 
     val defaults: Map<ActionType, ActionCost> = mapOf(
-        ActionType.SMS_SENT to ActionCost(10),
-        ActionType.MMS_SENT to ActionCost(25),
-        ActionType.CALL_MADE to ActionCost(100, 50, UnitType.PER_MINUTE),
-        ActionType.CALL_RECEIVED to ActionCost(0, 50, UnitType.PER_MINUTE),
-        ActionType.VIDEO_CALL_MADE to ActionCost(75, 75, UnitType.PER_MINUTE),
-        ActionType.PHOTO_TAKEN to ActionCost(50),
-        ActionType.WEB_SESSION to ActionCost(30, 20, UnitType.PER_MINUTE),
-        ActionType.APP_OPEN to ActionCost(13),
-        ActionType.TEMP_ACCESS_GRANTED to ActionCost(500),
-        ActionType.VIDEO_WATCHED to ActionCost(150, 100, UnitType.PER_MINUTE),
-        ActionType.GAME_SESSION to ActionCost(75, 40, UnitType.PER_MINUTE),
-        ActionType.SOCIAL_SCROLL to ActionCost(50, 25, UnitType.PER_MINUTE),
-        ActionType.AUDIO_STREAMED to ActionCost(20, 8, UnitType.PER_MINUTE),
+        ActionType.SMS_SENT to ActionCost(50),
+        ActionType.MMS_SENT to ActionCost(125),
+        ActionType.CALL_MADE to ActionCost(500, 250, UnitType.PER_MINUTE),
+        ActionType.CALL_RECEIVED to ActionCost(0, 250, UnitType.PER_MINUTE),
+        ActionType.VIDEO_CALL_MADE to ActionCost(375, 375, UnitType.PER_MINUTE),
+        ActionType.PHOTO_TAKEN to ActionCost(250),
+        ActionType.WEB_SESSION to ActionCost(150, 100, UnitType.PER_MINUTE),
+        ActionType.APP_OPEN to ActionCost(65),
+        ActionType.TEMP_ACCESS_GRANTED to ActionCost(2500),
+        ActionType.VIDEO_WATCHED to ActionCost(750, 500, UnitType.PER_MINUTE),
+        ActionType.GAME_SESSION to ActionCost(375, 200, UnitType.PER_MINUTE),
+        ActionType.SOCIAL_SCROLL to ActionCost(250, 125, UnitType.PER_MINUTE),
+        ActionType.AUDIO_STREAMED to ActionCost(100, 40, UnitType.PER_MINUTE),
         ActionType.CHECK_IN to ActionCost(0),
         ActionType.TOKEN_REQUEST to ActionCost(0),
         ActionType.URL_BLOCKED to ActionCost(0),
