@@ -30,6 +30,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -64,6 +66,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.border
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -486,14 +489,23 @@ private fun ThreadRow(
 
         Spacer(Modifier.width(12.dp))
 
-        // Content
-        Column(modifier = Modifier.weight(1f)) {
+        // Content — title row uses flex + widthIn(0) so long group titles ellipsize without
+        // reflowing the date ("Yesterday" stays one line) or squeezing the trailing status icons.
+        Column(
+            modifier = Modifier
+                .weight(1f, fill = true)
+                .widthIn(min = 0.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f, fill = true)
+                        .widthIn(min = 0.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
                         text = item.resolvedName,
                         fontSize = 16.sp,
@@ -501,17 +513,11 @@ private fun ThreadRow(
                         color = OnNight,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                        softWrap = false,
+                        modifier = Modifier
+                            .weight(1f, fill = true)
+                            .widthIn(min = 0.dp)
                     )
-                    if (item.isGroup) {
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            Icons.Default.Group,
-                            contentDescription = "group conversation",
-                            tint = OnNight.copy(alpha = 0.55f),
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
                     if (item.isReplyBlocked) {
                         Spacer(Modifier.width(4.dp))
                         Icon(
@@ -531,10 +537,15 @@ private fun ThreadRow(
                         )
                     }
                 }
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = formatTimestamp(item.thread.date),
                     fontSize = 12.sp,
-                    color = if (item.thread.unreadCount > 0) BrandViolet else OnNight.copy(alpha = 0.5f)
+                    color = if (item.thread.unreadCount > 0) BrandViolet else OnNight.copy(alpha = 0.5f),
+                    maxLines = 1,
+                    softWrap = false,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.wrapContentWidth(align = Alignment.End)
                 )
             }
 

@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.ConversationMeta
+import com.wew.launcher.data.model.composedDisplayName
 import com.wew.launcher.data.model.WewContact
 import com.wew.launcher.data.model.isApprovedForComms
 import com.wew.launcher.data.repository.DeviceRepository
@@ -444,12 +445,13 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
             val displayName = when {
                 isParent -> parentDisplayName
                 matchingContacts.size == 1 && !isGroup -> matchingContacts.first().name
-                matchingContacts.size >= 1 && isGroup -> {
-                    val names = matchingContacts.map { it.name } +
-                        unapprovedParties.map { formatPhoneDisplay(it) }
-                    names.take(3).joinToString(", ") +
-                        if (names.size > 3) ", …" else ""
+                isGroup && matchingContacts.isNotEmpty() -> {
+                    val contactPart = matchingContacts.map { shortContactLabel(it) }
+                    val unapprovedPart = unapprovedParties.map { formatPhoneShort(it) }
+                    (contactPart + unapprovedPart).joinToString(", ")
                 }
+                isGroup && matchingContacts.isEmpty() ->
+                    remoteParties.joinToString(", ") { formatPhoneShort(it) }
                 parentPhone != null && remoteParties.isNotEmpty() &&
                     remoteParties.all { PhoneMatch.sameSubscriber(it, parentPhone) } -> parentDisplayName
                 else -> formatPhoneDisplay(remoteParties.firstOrNull() ?: raw.firstOrNull() ?: thread.address)
@@ -689,6 +691,32 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         return if (digits.length == 10)
             "(${digits.substring(0, 3)}) ${digits.substring(3, 6)}-${digits.substring(6)}"
         else raw
+    }
+
+    /**
+     * Compact phone label for group participant lists (unknown / unapproved numbers).
+     */
+    private fun formatPhoneShort(raw: String): String {
+        val d = PhoneMatch.digitsOnly(raw)
+        return when {
+            d.length >= 4 -> "…${d.takeLast(4)}"
+            d.isNotEmpty() -> d
+            else -> raw
+        }
+    }
+
+    /**
+     * First name (or best short label) for thread title — keeps group rows from blowing out width.
+     */
+    private fun shortContactLabel(c: WewContact): String {
+        c.firstName?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        val firstToken = c.name.trim().split(Regex("\\s+")).firstOrNull { it.isNotEmpty() }
+        if (firstToken != null) return firstToken
+        c.nickname?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        val full = c.composedDisplayName().ifBlank { c.name }
+        val fromFull = full.split(Regex("\\s+")).firstOrNull { it.isNotEmpty() }
+        if (fromFull != null) return fromFull
+        return c.phone?.let { formatPhoneShort(it) } ?: "?"
     }
 
     companion object {

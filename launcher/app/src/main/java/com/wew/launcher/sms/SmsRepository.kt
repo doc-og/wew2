@@ -77,7 +77,18 @@ class SmsRepository(private val context: Context) {
                 }
             }
         }.onFailure { Log.e("SmsRepo", "getThreads failed: ${it.message}") }
-        threads
+
+        // Telephony's SNIPPET is often empty for media-only MMS, some group threads, or
+        // right after a send before the provider refreshes. Fill from the last message.
+        threads.map { thread ->
+            if (thread.snippet.isNotBlank() || thread.messageCount <= 0) {
+                thread
+            } else {
+                val last = getMessages(thread.threadId).maxByOrNull { it.date }
+                val fill = last?.let { messagePreviewText(it) }.orEmpty()
+                if (fill.isNotEmpty()) thread.copy(snippet = fill) else thread
+            }
+        }
     }
 
     // ── Messages (within a thread) ────────────────────────────────────────────
@@ -700,6 +711,22 @@ class SmsRepository(private val context: Context) {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * One-line list preview when [Telephony.Threads.SNIPPET] is blank but a body or
+     * attachment exists (e.g. image MMS with no caption).
+     */
+    private fun messagePreviewText(m: SmsMessage): String {
+        val t = m.body.trim()
+        if (t.isNotEmpty()) return t
+        return when (m.type) {
+            SmsMessageType.SMS, SmsMessageType.MMS_TEXT -> "Message"
+            SmsMessageType.MMS_IMAGE -> "Photo"
+            SmsMessageType.MMS_VIDEO -> "Video"
+            SmsMessageType.MMS_AUDIO -> "Audio"
+            SmsMessageType.CALL_SUMMARY -> "Call"
+        }
+    }
 
     private fun getUnreadCountForThread(threadId: Long): Int {
         return runCatching {
