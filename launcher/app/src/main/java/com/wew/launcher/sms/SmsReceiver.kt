@@ -49,9 +49,9 @@ class SmsReceiver : BroadcastReceiver() {
 
         val senderAddress = messages.first().displayOriginatingAddress ?: return
         val body = messages.joinToString("") { it.messageBody ?: "" }
-        // Some carriers send 0 or wildly skewed timestamps; fall back to local time.
-        val networkTs = messages.first().timestampMillis
-        val timestamp = if (networkTs > 0L) networkTs else System.currentTimeMillis()
+        // Wall-clock instant when the device handled delivery — matches the conversation
+        // list and avoids SMSC/PDU timestamps that skew chat order and bubble labels.
+        val deliveredAtMs = System.currentTimeMillis()
 
         Log.d("SmsReceiver", "Incoming SMS from $senderAddress (${body.length} chars)")
 
@@ -63,8 +63,8 @@ class SmsReceiver : BroadcastReceiver() {
         val values = ContentValues().apply {
             put(Telephony.Sms.ADDRESS, senderAddress)
             put(Telephony.Sms.BODY, body)
-            put(Telephony.Sms.DATE, timestamp)
-            put(Telephony.Sms.DATE_SENT, timestamp)
+            put(Telephony.Sms.DATE, deliveredAtMs)
+            put(Telephony.Sms.DATE_SENT, deliveredAtMs)
             put(Telephony.Sms.READ, 0)
             put(Telephony.Sms.SEEN, 0)
             put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_INBOX)
@@ -74,6 +74,20 @@ class SmsReceiver : BroadcastReceiver() {
         }.onFailure {
             Log.e("SmsReceiver", "Failed to insert inbox row (is WeW default SMS app?): ${it.message}")
         }.getOrNull()
+
+        // Some providers rewrite DATE/DATE_SENT from the PDU after insert; re-apply
+        // delivery time so chat reads the same instant as the list.
+        if (inboxUri != null) {
+            val fix = ContentValues().apply {
+                put(Telephony.Sms.DATE, deliveredAtMs)
+                put(Telephony.Sms.DATE_SENT, deliveredAtMs)
+            }
+            runCatching {
+                context.contentResolver.update(inboxUri, fix, null, null)
+            }.onFailure {
+                Log.w("SmsReceiver", "post-insert DATE fix failed: ${it.message}")
+            }
+        }
 
         if (inboxUri == null) {
             // Without the inbox row the message is lost to the UI; bail before
