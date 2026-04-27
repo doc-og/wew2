@@ -24,8 +24,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDateTime
 import java.time.OffsetDateTime
-import java.time.format.DateTimeParseException
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 
 // ── Chat rows (local SMS + server system summaries) ───────────────────────────
 
@@ -35,7 +38,8 @@ sealed interface ChatBubbleItem {
 
     data class Local(val message: SmsMessage) : ChatBubbleItem {
         override val sortKey: Long get() = message.date
-        override val stableKey: String get() = "sms-${message.id}"
+        // SMS and MMS _id namespaces overlap; include type so LazyColumn keys stay unique.
+        override val stableKey: String get() = "loc-${message.type.name}-${message.id}"
     }
 
     data class System(
@@ -164,12 +168,25 @@ class ChatViewModel(
         super.onCleared()
     }
 
+    /**
+     * Supabase returns `timestamptz` as an absolute instant (usually RFC3339 with `Z`
+     * or offset). Parse as instant first; only if offset is missing, treat the
+     * local date-time as UTC so merge order matches server storage, not the child
+     * phone's zone.
+     */
     private fun parseCreatedAt(iso: String): Long {
-        return try {
-            OffsetDateTime.parse(iso).toInstant().toEpochMilli()
-        } catch (_: DateTimeParseException) {
-            System.currentTimeMillis()
-        }
+        val s = iso.trim()
+        if (s.isEmpty()) return 0L
+        runCatching { Instant.parse(s).toEpochMilli() }.getOrNull()?.let { return it }
+        runCatching { OffsetDateTime.parse(s).toInstant().toEpochMilli() }.getOrNull()?.let { return it }
+        runCatching {
+            LocalDateTime.parse(s, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                .atOffset(ZoneOffset.UTC)
+                .toInstant()
+                .toEpochMilli()
+        }.getOrNull()?.let { return it }
+        Log.w("ChatVM", "parseCreatedAt failed: ${s.take(96)}")
+        return 0L
     }
 
     private suspend fun buildChatItems(deviceId: String): List<ChatBubbleItem> {
@@ -193,7 +210,9 @@ class ChatViewModel(
             )
         }
         val localItems = sms.map { ChatBubbleItem.Local(it) }
-        return (localItems + systemItems).sortedBy { it.sortKey }
+        return (localItems + systemItems).sortedWith(
+            compareBy<ChatBubbleItem>({ it.sortKey }, { it.stableKey })
+        )
     }
 
     // ── Loading ───────────────────────────────────────────────────────────────

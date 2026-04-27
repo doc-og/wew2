@@ -83,10 +83,8 @@ import com.wew.launcher.ui.viewmodel.ConversationListUiState
 import com.wew.launcher.telecom.WewCallManager
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
 import androidx.compose.ui.graphics.asImageBitmap
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
+import com.wew.launcher.ui.util.MessageTimeFormat
+import java.time.ZoneId
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -103,6 +101,7 @@ fun ConversationListScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val messageDisplayZone = MessageTimeFormat.receivedOnDeviceZone()
 
     // Place parent call in-app + send SOS SMS when SOS is confirmed
     LaunchedEffect(state.pendingEmergencyCall) {
@@ -204,6 +203,7 @@ fun ConversationListScreen(
                     items(state.conversations, key = { it.thread.threadId }) { item ->
                         SwipeableThreadRow(
                             item = item,
+                            displayZone = messageDisplayZone,
                             onClick = { onOpenThread(item) },
                             onLongPress = { viewModel.onLongPress(item) },
                             onToggleRead = { viewModel.toggleReadState(item) }
@@ -381,6 +381,7 @@ private fun formatTokens(n: Int): String = when {
 @Composable
 private fun SwipeableThreadRow(
     item: ConversationItem,
+    displayZone: ZoneId,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
     onToggleRead: () -> Unit
@@ -408,6 +409,7 @@ private fun SwipeableThreadRow(
     ) {
         ThreadRow(
             item = item,
+            displayZone = displayZone,
             onClick = onClick,
             onLongPress = onLongPress
         )
@@ -449,6 +451,7 @@ private fun SwipeToggleReadBackground(showsMarkRead: Boolean) {
 @Composable
 private fun ThreadRow(
     item: ConversationItem,
+    displayZone: ZoneId,
     onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
@@ -539,7 +542,7 @@ private fun ThreadRow(
                 }
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = formatTimestamp(item.thread.date),
+                    text = MessageTimeFormat.formatThreadPreview(item.thread.date, displayZone),
                     fontSize = 12.sp,
                     color = if (item.thread.unreadCount > 0) BrandViolet else OnNight.copy(alpha = 0.5f),
                     maxLines = 1,
@@ -925,35 +928,3 @@ private fun SosConfirmDialog(
     )
 }
 
-// ── Timestamp helpers ─────────────────────────────────────────────────────────
-
-private fun formatTimestamp(epochMs: Long): String {
-    if (epochMs == 0L) return ""
-    val msgCal = Calendar.getInstance().apply { timeInMillis = epochMs }
-    val now = Calendar.getInstance()
-    return when {
-        isSameDay(msgCal, now) ->
-            SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(epochMs))
-        isYesterday(msgCal, now) -> "Yesterday"
-        isSameWeek(msgCal, now) ->
-            SimpleDateFormat("EEE", Locale.getDefault()).format(Date(epochMs))
-        else ->
-            SimpleDateFormat("MM/dd/yy", Locale.getDefault()).format(Date(epochMs))
-    }
-}
-
-private fun isSameDay(a: Calendar, b: Calendar) =
-    a.get(Calendar.YEAR) == b.get(Calendar.YEAR) &&
-        a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
-
-private fun isYesterday(a: Calendar, b: Calendar): Boolean {
-    val yesterday = Calendar.getInstance().apply {
-        timeInMillis = b.timeInMillis
-        add(Calendar.DAY_OF_YEAR, -1)
-    }
-    return isSameDay(a, yesterday)
-}
-
-private fun isSameWeek(a: Calendar, b: Calendar) =
-    a.get(Calendar.YEAR) == b.get(Calendar.YEAR) &&
-        a.get(Calendar.WEEK_OF_YEAR) == b.get(Calendar.WEEK_OF_YEAR)

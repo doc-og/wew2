@@ -100,7 +100,7 @@ class SmsRepository(private val context: Context) {
         val messages = mutableListOf<SmsMessage>()
         messages += getSmsMessages(threadId)
         messages += getMmsMessages(threadId)
-        messages.sortBy { it.date }
+        messages.sortWith(compareBy({ it.date }, { it.type.ordinal }, { it.id }))
         messages
     }
 
@@ -169,12 +169,19 @@ class SmsRepository(private val context: Context) {
                             ?.let { SmsMessageType.MMS_AUDIO }
                         ?: SmsMessageType.MMS_TEXT
 
+                    val rawMmsDate = cursor.getLong(cursor.getColumnIndexOrThrow(Telephony.Mms.DATE))
+                    // Provider contract is seconds since epoch; some OEMs store ms already.
+                    val dateMs = if (rawMmsDate < 1_000_000_000_000L) {
+                        rawMmsDate * 1000L
+                    } else {
+                        rawMmsDate
+                    }
                     list += SmsMessage(
                         id = mmsId,
                         threadId = threadId,
                         address = getMmsSenderAddress(mmsId),
                         body = bodyPart?.let { readMmsPartText(it.contentUri) } ?: "",
-                        date = cursor.getLong(cursor.getColumnIndexOrThrow(Telephony.Mms.DATE)) * 1000L,
+                        date = dateMs,
                         direction = if (box == Telephony.Mms.MESSAGE_BOX_INBOX) SmsDirection.INCOMING else SmsDirection.OUTGOING,
                         isRead = cursor.getInt(cursor.getColumnIndexOrThrow(Telephony.Mms.READ)) == 1,
                         type = mediaType,

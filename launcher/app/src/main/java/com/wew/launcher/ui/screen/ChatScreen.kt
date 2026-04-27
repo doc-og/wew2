@@ -106,10 +106,8 @@ import com.wew.launcher.telecom.WewCallManager
 import com.wew.launcher.ui.viewmodel.ChatViewModel
 import com.wew.launcher.ui.viewmodel.ConversationListUiState
 import com.wew.launcher.ui.viewmodel.ConversationListViewModel
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
+import com.wew.launcher.ui.util.MessageTimeFormat
+import java.time.ZoneId
 
 private val URL_REGEX = Regex("""https?://[^\s<>"]+""")
 
@@ -183,6 +181,7 @@ fun ChatScreen(
     )
     val state by vm.uiState.collectAsState()
     val listState = rememberLazyListState()
+    val messageDisplayZone = MessageTimeFormat.receivedOnDeviceZone()
 
     LaunchedEffect(isNewCompose, conversationListViewModel) {
         if (isNewCompose && conversationListViewModel != null) {
@@ -362,10 +361,14 @@ fun ChatScreen(
                     when (item) {
                         is ChatBubbleItem.Local -> MessageBubble(
                             message = item.message,
+                            displayZone = messageDisplayZone,
                             onImageClick = vm::showFullScreenImage,
                             onOpenUrl = onOpenUrl
                         )
-                        is ChatBubbleItem.System -> SystemMessageBubble(body = item.body)
+                        is ChatBubbleItem.System -> SystemMessageBubble(
+                            body = item.body,
+                            timeLabel = MessageTimeFormat.formatBubble(item.createdAtMs, messageDisplayZone)
+                        )
                     }
                 }
             }
@@ -609,7 +612,7 @@ private fun NewComposeRecipientMultiselect(
     }
 
 @Composable
-private fun SystemMessageBubble(body: String) {
+private fun SystemMessageBubble(body: String, timeLabel: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -633,6 +636,14 @@ private fun SystemMessageBubble(body: String) {
                 fontSize = 14.sp,
                 color = OnNight.copy(alpha = 0.92f),
                 lineHeight = 20.sp
+            )
+        }
+        if (timeLabel.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = timeLabel,
+                fontSize = 11.sp,
+                color = OnNight.copy(alpha = 0.4f)
             )
         }
     }
@@ -770,6 +781,7 @@ private fun CallConfirmDialog(
 @Composable
 private fun MessageBubble(
     message: SmsMessage,
+    displayZone: ZoneId,
     onImageClick: (String) -> Unit = {},
     onOpenUrl: (String) -> Unit = {}
 ) {
@@ -863,7 +875,7 @@ private fun MessageBubble(
 
         Spacer(Modifier.height(1.dp))
         Text(
-            text = formatBubbleTime(message.date),
+            text = MessageTimeFormat.formatBubble(message.date, displayZone),
             fontSize = 11.sp,
             color = OnNight.copy(alpha = 0.4f),
             modifier = Modifier.padding(horizontal = 4.dp)
@@ -1078,17 +1090,3 @@ private fun FullScreenImageViewer(uri: String, onDismiss: () -> Unit) {
     }
 }
 
-// ── Timestamp ─────────────────────────────────────────────────────────────────
-
-private fun formatBubbleTime(epochMs: Long): String {
-    if (epochMs == 0L) return ""
-    val cal = Calendar.getInstance().apply { timeInMillis = epochMs }
-    val now = Calendar.getInstance()
-    val sameDay = cal.get(Calendar.YEAR) == now.get(Calendar.YEAR) &&
-        cal.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR)
-    return if (sameDay) {
-        SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(epochMs))
-    } else {
-        SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(epochMs))
-    }
-}
