@@ -78,6 +78,16 @@ adb shell am force-stop com.wew.launcher
 adb shell am start -n com.wew.launcher/.MainActivity
 ```
 
+### Agent: local device verification (mandatory)
+
+When an agent ships **Android app code** (launcher or parent-app) that is ready to try on hardware:
+
+1. **Do not** ask the user to install or assume they already did. **Run the install yourself** on the machine’s connected device (`adb devices` must show `device`, not `unauthorized` / empty).
+2. **Rebuild** if the change touches Kotlin/resources (`./gradlew assembleDebug` for the affected app), then **`adb install -r`** the debug APK from the paths above.
+3. **Restart the app** after install when testing behavior or cold start: `adb shell am force-stop <package>` then `adb shell am start -n <package>/<activity>` (see snippets above for the launcher).
+4. **No device connected:** say so plainly and list the exact commands to run once a device is plugged in; still leave the repo in a built state if possible.
+5. **Supabase migrations:** if a change requires DB migration, prefer running it yourself via `supabase db push` (or the project’s documented path) when credentials/network allow. If you must ask the user, **paste the full migration SQL** (or the exact file path plus `supabase db push` / dashboard steps) so they can run it without guesswork.
+
 Child and parent need `local.properties` with `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
 
 ### Web dashboard

@@ -32,6 +32,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -541,7 +542,9 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
     fun markRead(item: ConversationItem) {
         viewModelScope.launch {
-            smsRepo.markThreadRead(item.thread.threadId)
+            withContext(Dispatchers.IO) {
+                smsRepo.markThreadRead(item.thread.threadId)
+            }
             dismissContextMenu()
             load()
         }
@@ -550,14 +553,19 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     /**
      * Toggles the read state of [item] in response to a swipe gesture.
      * Unread → read marks every unread row; read → unread flips only the most
-     * recent incoming SMS so the unread count becomes 1 (iOS-style).
+     * recent incoming SMS or MMS so the unread count becomes 1 (iOS-style).
      */
     fun toggleReadState(item: ConversationItem) {
         viewModelScope.launch {
-            if (item.thread.unreadCount > 0) {
-                smsRepo.markThreadRead(item.thread.threadId)
-            } else {
-                smsRepo.markThreadUnread(item.thread.threadId)
+            val tid = item.thread.threadId
+            // Branch from the provider, not [item.thread.unreadCount]: the list can
+            // still show stale unread state after chat (debounced observer / timing).
+            withContext(Dispatchers.IO) {
+                if (smsRepo.providerUnreadCount(tid) > 0) {
+                    smsRepo.markThreadRead(tid)
+                } else {
+                    smsRepo.markThreadUnread(tid)
+                }
             }
             // observeSmsChanges will refresh the list; load() keeps behaviour
             // consistent if the observer is slow to fire on this OEM.

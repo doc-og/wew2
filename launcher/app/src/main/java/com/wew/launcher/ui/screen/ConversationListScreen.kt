@@ -59,6 +59,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
@@ -387,12 +390,16 @@ private fun SwipeableThreadRow(
     onToggleRead: () -> Unit
 ) {
     val isUnread = item.thread.unreadCount > 0
+    var swipeActionEpoch by remember { mutableIntStateOf(0) }
     // Key by thread id so the swipe state resets if a different thread ever
     // recycles into this list slot.
     val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             if (value == androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd) {
                 onToggleRead()
+                // Bump after dismissState exists — LaunchedEffect below calls reset() so the
+                // next swipe isn't eaten by M3 internal state after we veto dismiss.
+                swipeActionEpoch++
             }
             // Never actually dismiss: we fire the side effect and let the row
             // animate back to its resting position.
@@ -400,6 +407,9 @@ private fun SwipeableThreadRow(
         },
         positionalThreshold = { distance -> distance * 0.30f }
     )
+    LaunchedEffect(swipeActionEpoch) {
+        if (swipeActionEpoch > 0) dismissState.reset()
+    }
 
     androidx.compose.material3.SwipeToDismissBox(
         state = dismissState,

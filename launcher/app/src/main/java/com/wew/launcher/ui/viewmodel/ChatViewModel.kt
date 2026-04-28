@@ -21,9 +21,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -158,8 +160,10 @@ class ChatViewModel(
         val tid = currentThreadId
         if (tid == -1L) return
         viewModelScope.launch {
-            runCatching { smsRepo.markThreadRead(tid) }
-                .onFailure { Log.w("ChatVM", "markThreadRead failed: ${it.message}") }
+            withContext(Dispatchers.IO) {
+                runCatching { smsRepo.markThreadRead(tid) }
+                    .onFailure { Log.w("ChatVM", "markThreadRead failed: ${it.message}") }
+            }
         }
     }
 

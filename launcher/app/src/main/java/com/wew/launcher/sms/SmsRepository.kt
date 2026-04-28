@@ -170,12 +170,7 @@ class SmsRepository(private val context: Context) {
                         ?: SmsMessageType.MMS_TEXT
 
                     val rawMmsDate = cursor.getLong(cursor.getColumnIndexOrThrow(Telephony.Mms.DATE))
-                    // Provider contract is seconds since epoch; some OEMs store ms already.
-                    val dateMs = if (rawMmsDate < 1_000_000_000_000L) {
-                        rawMmsDate * 1000L
-                    } else {
-                        rawMmsDate
-                    }
+                    val dateMs = normalizeProviderDateMillis(rawMmsDate)
                     list += SmsMessage(
                         id = mmsId,
                         threadId = threadId,
@@ -453,52 +448,161 @@ class SmsRepository(private val context: Context) {
 
     // ── Thread management ─────────────────────────────────────────────────────
 
+    /**
+     * Marks every SMS/MMS row in [threadId] as read. Uses bulk updates first,
+     * then per-row URIs when the provider still reports unread rows — some OEMs
+     * ignore THREAD_ID bulk updates (same failure mode as [deleteThread]).
+     *
+     * Treats READ [null] like unread match so rows that never defaulted READ stay clearable.
+     */
     fun markThreadRead(threadId: Long) {
         runCatching {
-            val values = ContentValues().apply { put(Telephony.Sms.READ, 1) }
+            val tid = threadId.toString()
+            val smsUnreadSel =
+                "${Telephony.Sms.THREAD_ID} = ? AND " +
+                    "(${Telephony.Sms.READ} IS NULL OR ${Telephony.Sms.READ} = 0)"
+            val smsVals = ContentValues().apply {
+                put(Telephony.Sms.READ, 1)
+                put(Telephony.Sms.SEEN, 1)
+            }
             context.contentResolver.update(
                 Telephony.Sms.CONTENT_URI,
-                values,
-                "${Telephony.Sms.THREAD_ID} = ? AND ${Telephony.Sms.READ} = 0",
-                arrayOf(threadId.toString())
+                smsVals,
+                smsUnreadSel,
+                arrayOf(tid)
             )
+            val mmsUnreadSel =
+                "${Telephony.Mms.THREAD_ID} = ? AND " +
+                    "(${Telephony.Mms.READ} IS NULL OR ${Telephony.Mms.READ} = 0)"
             context.contentResolver.update(
                 Telephony.Mms.CONTENT_URI,
                 ContentValues().apply { put(Telephony.Mms.READ, 1) },
-                "${Telephony.Mms.THREAD_ID} = ? AND ${Telephony.Mms.READ} = 0",
-                arrayOf(threadId.toString())
+                mmsUnreadSel,
+                arrayOf(tid)
             )
+            if (providerUnreadCount(threadId) > 0) {
+                markThreadReadPerSmsRow(tid)
+                markThreadReadPerMmsRow(tid)
+            }
         }.onFailure { Log.e("SmsRepo", "markThreadRead failed: ${it.message}") }
     }
 
+    private fun markThreadReadPerSmsRow(tidStr: String) {
+        context.contentResolver.query(
+            Telephony.Sms.CONTENT_URI,
+            arrayOf(Telephony.Sms._ID),
+            "${Telephony.Sms.THREAD_ID} = ? AND (${Telephony.Sms.READ} IS NULL OR ${Telephony.Sms.READ} = 0)",
+            arrayOf(tidStr),
+            null
+        )?.use { c ->
+            val idx = c.getColumnIndexOrThrow(Telephony.Sms._ID)
+            while (c.moveToNext()) {
+                val id = c.getLong(idx)
+                runCatching {
+                    context.contentResolver.update(
+                        Uri.parse("${Telephony.Sms.CONTENT_URI}/$id"),
+                        ContentValues().apply {
+                            put(Telephony.Sms.READ, 1)
+                            put(Telephony.Sms.SEEN, 1)
+                        },
+                        null,
+                        null
+                    )
+                }.onFailure { Log.w("SmsRepo", "mark read sms row $id: ${it.message}") }
+            }
+        }
+    }
+
+    private fun markThreadReadPerMmsRow(tidStr: String) {
+        context.contentResolver.query(
+            Telephony.Mms.CONTENT_URI,
+            arrayOf(Telephony.Mms._ID),
+            "${Telephony.Mms.THREAD_ID} = ? AND (${Telephony.Mms.READ} IS NULL OR ${Telephony.Mms.READ} = 0)",
+            arrayOf(tidStr),
+            null
+        )?.use { c ->
+            val idx = c.getColumnIndexOrThrow(Telephony.Mms._ID)
+            while (c.moveToNext()) {
+                val id = c.getLong(idx)
+                runCatching {
+                    context.contentResolver.update(
+                        Uri.parse("${Telephony.Mms.CONTENT_URI}/$id"),
+                        ContentValues().apply { put(Telephony.Mms.READ, 1) },
+                        null,
+                        null
+                    )
+                }.onFailure { Log.w("SmsRepo", "mark read mms row $id: ${it.message}") }
+            }
+        }
+    }
+
     /**
-     * Marks the thread as unread by flipping READ=0 on the most recent incoming SMS
-     * row. We intentionally flip only the latest received message so the unread
-     * count rises to 1 (iOS-style) instead of re-surfacing every historical message.
-     * No-op if the thread has no incoming SMS rows (e.g. MMS-only) — matches the
-     * existing unread-count semantics which look only at SMS.
+     * Marks the thread as unread by flipping READ=0 on the most recent **incoming**
+     * SMS or MMS row (whichever is newer). Only that one row is toggled so the
+     * unread count bumps to a small number (iOS-style) instead of resurrecting
+     * the whole history. No-op if there are no inbound messages.
+     *
+     * Uses `DATE DESC` without SQL `LIMIT` — Telephony providers often reject
+     * `LIMIT` in the sort string, which previously made this a silent no-op.
      */
     fun markThreadUnread(threadId: Long) {
         runCatching {
-            val latestId = context.contentResolver.query(
+            val tid = threadId.toString()
+            var latestSmsId: Long? = null
+            var latestSmsDate = 0L
+            context.contentResolver.query(
                 Telephony.Sms.CONTENT_URI,
-                arrayOf(Telephony.Sms._ID),
+                arrayOf(Telephony.Sms._ID, Telephony.Sms.DATE),
                 "${Telephony.Sms.THREAD_ID} = ? AND ${Telephony.Sms.TYPE} = ?",
-                arrayOf(threadId.toString(), Telephony.Sms.MESSAGE_TYPE_INBOX.toString()),
-                "${Telephony.Sms.DATE} DESC LIMIT 1"
+                arrayOf(tid, Telephony.Sms.MESSAGE_TYPE_INBOX.toString()),
+                "${Telephony.Sms.DATE} DESC"
             )?.use { c ->
-                if (c.moveToFirst()) c.getLong(0) else null
+                if (c.moveToFirst()) {
+                    latestSmsId = c.getLong(c.getColumnIndexOrThrow(Telephony.Sms._ID))
+                    val rawSmsDate = c.getLong(c.getColumnIndexOrThrow(Telephony.Sms.DATE))
+                    latestSmsDate = normalizeProviderDateMillis(rawSmsDate)
+                }
             }
-            if (latestId == null) {
-                Log.i("SmsRepo", "markThreadUnread: no incoming sms row for thread $threadId")
-                return@runCatching
+            var latestMmsId: Long? = null
+            var latestMmsDate = 0L
+            context.contentResolver.query(
+                Telephony.Mms.CONTENT_URI,
+                arrayOf(Telephony.Mms._ID, Telephony.Mms.DATE),
+                "${Telephony.Mms.THREAD_ID} = ? AND ${Telephony.Mms.MESSAGE_BOX} = ?",
+                arrayOf(tid, Telephony.Mms.MESSAGE_BOX_INBOX.toString()),
+                "${Telephony.Mms.DATE} DESC"
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    latestMmsId = c.getLong(c.getColumnIndexOrThrow(Telephony.Mms._ID))
+                    val raw = c.getLong(c.getColumnIndexOrThrow(Telephony.Mms.DATE))
+                    latestMmsDate = normalizeProviderDateMillis(raw)
+                }
             }
-            context.contentResolver.update(
-                Telephony.Sms.CONTENT_URI,
-                ContentValues().apply { put(Telephony.Sms.READ, 0) },
-                "${Telephony.Sms._ID} = ?",
-                arrayOf(latestId.toString())
-            )
+            when {
+                latestSmsId == null && latestMmsId == null -> {
+                    Log.i("SmsRepo", "markThreadUnread: no incoming rows for thread $threadId")
+                    return@runCatching
+                }
+                latestMmsId != null && (latestSmsId == null || latestMmsDate >= latestSmsDate) -> {
+                    context.contentResolver.update(
+                        Telephony.Mms.CONTENT_URI,
+                        ContentValues().apply { put(Telephony.Mms.READ, 0) },
+                        "${Telephony.Mms._ID} = ?",
+                        arrayOf(latestMmsId.toString())
+                    )
+                }
+                else -> {
+                    context.contentResolver.update(
+                        Telephony.Sms.CONTENT_URI,
+                        ContentValues().apply {
+                            put(Telephony.Sms.READ, 0)
+                            put(Telephony.Sms.SEEN, 0)
+                        },
+                        "${Telephony.Sms._ID} = ?",
+                        arrayOf(latestSmsId.toString())
+                    )
+                }
+            }
         }.onFailure { Log.e("SmsRepo", "markThreadUnread failed: ${it.message}") }
     }
 
@@ -735,19 +839,44 @@ class SmsRepository(private val context: Context) {
         }
     }
 
-    private fun getUnreadCountForThread(threadId: Long): Int {
+    private fun getUnreadCountForThread(threadId: Long): Int = providerUnreadCount(threadId)
+
+    /**
+     * Unread rows in the Telephony providers for [threadId]. Use this instead of
+     * [SmsThread.unreadCount] when deciding read vs unread actions — the list model
+     * can lag behind the DB (debounced observer, race when leaving chat).
+     */
+    fun providerUnreadCount(threadId: Long): Int {
         return runCatching {
-            context.contentResolver.query(
+            val tid = threadId.toString()
+            val smsUnread =
+                "${Telephony.Sms.THREAD_ID} = ? AND (${Telephony.Sms.READ} IS NULL OR ${Telephony.Sms.READ} = 0)"
+            val sms = context.contentResolver.query(
                 Telephony.Sms.CONTENT_URI,
                 arrayOf("COUNT(*)"),
-                "${Telephony.Sms.THREAD_ID} = ? AND ${Telephony.Sms.READ} = 0",
-                arrayOf(threadId.toString()),
+                smsUnread,
+                arrayOf(tid),
                 null
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getInt(0) else 0
-            } ?: 0
+            )?.use { c -> if (c.moveToFirst()) c.getInt(0) else 0 } ?: 0
+            val mmsUnread =
+                "${Telephony.Mms.THREAD_ID} = ? AND (${Telephony.Mms.READ} IS NULL OR ${Telephony.Mms.READ} = 0)"
+            val mms = context.contentResolver.query(
+                Telephony.Mms.CONTENT_URI,
+                arrayOf("COUNT(*)"),
+                mmsUnread,
+                arrayOf(tid),
+                null
+            )?.use { c -> if (c.moveToFirst()) c.getInt(0) else 0 } ?: 0
+            sms + mms
         }.getOrElse { 0 }
     }
+
+    /**
+     * SMS/MMS `DATE` from the provider is usually ms for SMS and seconds for MMS;
+     * some OEMs store ms for both. Normalize so cross-table "latest inbound" compares fairly.
+     */
+    private fun normalizeProviderDateMillis(raw: Long): Long =
+        if (raw in 1L until 1_000_000_000_000L) raw * 1000L else raw
 
     private fun getLastMessageType(threadId: Long): SmsMessageType {
         return runCatching {
