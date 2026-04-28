@@ -30,4 +30,20 @@ object PhoneMatch {
             else -> d
         }
     }
+
+    /**
+     * One entry per subscriber for SMS/MMS send lists. The Telephony provider often
+     * stores the same person twice (e.g. +1… and 10-digit); treating them as two
+     * recipients sends duplicate messages to the parent.
+     */
+    fun uniqueSubscribersPreserveOrder(addresses: List<String>): List<String> {
+        if (addresses.size <= 1) return addresses
+        val out = mutableListOf<String>()
+        for (a in addresses) {
+            val t = a.trim()
+            if (t.isEmpty()) continue
+            if (out.none { sameSubscriber(it, t) }) out.add(t)
+        }
+        return out
+    }
 }

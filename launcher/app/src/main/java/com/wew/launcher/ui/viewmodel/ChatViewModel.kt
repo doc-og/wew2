@@ -12,6 +12,7 @@ import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.composedDisplayName
 import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.sms.MessagingCapability
+import com.wew.launcher.telecom.PhoneMatch
 import com.wew.launcher.sms.SmsDirection
 import com.wew.launcher.sms.SmsMessage
 import com.wew.launcher.sms.SmsRepository
@@ -384,7 +385,7 @@ class ChatViewModel(
         viewModelScope.launch {
             // Existing thread: route through every participant so group replies
             // land in the same thread instead of forking into 1:1s.
-            val targets: List<String> = if (seedTargets.size > 1) {
+            val targetsRaw: List<String> = if (seedTargets.size > 1) {
                 seedTargets
             } else if (currentThreadId != -1L) {
                 val fromThread = smsRepo.getParticipantAddressesForThread(currentThreadId)
@@ -394,6 +395,8 @@ class ChatViewModel(
             } else {
                 seedTargets
             }
+            // Provider can list +1… and 10-digit for the same parent — two sends or dual TO in MMS.
+            val targets = PhoneMatch.uniqueSubscribersPreserveOrder(targetsRaw)
 
             if (targets.isEmpty()) {
                 _uiState.update { it.copy(isSending = false, inputText = text, attachedImageUri = stagedAttach) }

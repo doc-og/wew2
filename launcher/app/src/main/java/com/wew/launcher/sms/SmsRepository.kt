@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.abs
 
 /**
  * SmsRepository — reads and writes SMS/MMS via Android's Telephony ContentProvider.
@@ -101,7 +102,38 @@ class SmsRepository(private val context: Context) {
         messages += getSmsMessages(threadId)
         messages += getMmsMessages(threadId)
         messages.sortWith(compareBy({ it.date }, { it.type.ordinal }, { it.id }))
-        messages
+        dedupeOutgoingEchoMessages(messages)
+    }
+
+    /**
+     * After sending, some devices persist two OUT rows for one send ([insertSentSmsRow]
+     * plus an OEM/stack echo). SMS↔MMS dual records can also appear for one logical send.
+     * Drop echoes that match another outgoing row with the same trimmed body inside a
+     * short time window while preserving distinct sends (same body minutes apart stays).
+     */
+    private fun dedupeOutgoingEchoMessages(sorted: List<SmsMessage>): List<SmsMessage> {
+        if (sorted.size < 2) return sorted
+        val out = ArrayList<SmsMessage>(sorted.size)
+        val windowMs = 2_500L
+        for (m in sorted) {
+            if (m.direction != SmsDirection.OUTGOING) {
+                out.add(m)
+                continue
+            }
+            val body = m.body.trim()
+            if (body.isEmpty()) {
+                out.add(m)
+                continue
+            }
+            val echo = out.any { prev ->
+                prev.direction == SmsDirection.OUTGOING &&
+                    prev.body.trim() == body &&
+                    abs(prev.date - m.date) <= windowMs
+            }
+            if (echo) continue
+            out.add(m)
+        }
+        return out
     }
 
     private fun getSmsMessages(threadId: Long): List<SmsMessage> {
