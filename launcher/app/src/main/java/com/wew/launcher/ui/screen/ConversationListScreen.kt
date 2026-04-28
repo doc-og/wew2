@@ -107,6 +107,12 @@ fun ConversationListScreen(
     val context = LocalContext.current
     val messageDisplayZone = MessageTimeFormat.receivedOnDeviceZone()
 
+    LaunchedEffect(state.tokenActionMessage) {
+        if (state.tokenActionMessage.isNullOrEmpty()) return@LaunchedEffect
+        kotlinx.coroutines.delay(2800)
+        viewModel.clearTokenActionMessage()
+    }
+
     // Place parent call in-app + send SOS SMS when SOS is confirmed
     LaunchedEffect(state.pendingEmergencyCall) {
         state.pendingEmergencyCall?.let { number ->
@@ -192,6 +198,18 @@ fun ConversationListScreen(
                 onMenuClick = { viewModel.showNavMenu() },
                 onNewConversation = onOpenNewCompose
             )
+
+            state.tokenActionMessage?.let { msg ->
+                Text(
+                    text = msg,
+                    color = WarningAmber,
+                    fontSize = 14.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    textAlign = TextAlign.Center
+                )
+            }
 
             if (state.isLoading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

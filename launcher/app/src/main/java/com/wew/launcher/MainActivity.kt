@@ -182,54 +182,74 @@ class MainActivity : ComponentActivity() {
                                     ConversationListScreen(
                                         viewModel = convListViewModel,
                                         onOpenThread = { item ->
-                                            screen = WewScreen.Chat(
-                                                threadId = item.thread.threadId,
-                                                address = item.thread.address,
-                                                displayName = item.resolvedName,
-                                                isNewCompose = false,
-                                                isGroup = item.isGroup,
-                                                unapprovedParticipantLabels = item.unapprovedParticipantLabels,
-                                                participantAddresses = item.participantAddresses,
-                                                isParent = item.isParent
-                                            )
+                                            convListViewModel.tryOpenChatEntry {
+                                                screen = WewScreen.Chat(
+                                                    threadId = item.thread.threadId,
+                                                    address = item.thread.address,
+                                                    displayName = item.resolvedName,
+                                                    isNewCompose = false,
+                                                    isGroup = item.isGroup,
+                                                    unapprovedParticipantLabels = item.unapprovedParticipantLabels,
+                                                    participantAddresses = item.participantAddresses,
+                                                    isParent = item.isParent
+                                                )
+                                            }
                                         },
                                         onOpenNewCompose = {
-                                            convListViewModel.load()
-                                            composeSession++
-                                            screen = WewScreen.Chat(
-                                                -1L,
-                                                "",
-                                                "new message",
-                                                isNewCompose = true,
-                                                composeSession = composeSession
-                                            )
+                                            convListViewModel.tryOpenChatEntry {
+                                                convListViewModel.load()
+                                                composeSession++
+                                                screen = WewScreen.Chat(
+                                                    -1L,
+                                                    "",
+                                                    "new message",
+                                                    isNewCompose = true,
+                                                    composeSession = composeSession
+                                                )
+                                            }
                                         },
-                                        onOpenContacts = { showContacts = true },
+                                        onOpenContacts = {
+                                            convListViewModel.tryOpenLauncherOverlay {
+                                                showContacts = true
+                                            }
+                                        },
                                         onOpenCheckIn = {
-                                            checkInViewModel.reset()
-                                            showCheckIn = true
+                                            convListViewModel.tryOpenLauncherOverlay {
+                                                checkInViewModel.reset()
+                                                showCheckIn = true
+                                            }
                                         },
-                                        onOpenMap = { screen = WewScreen.Map },
+                                        onOpenMap = {
+                                            convListViewModel.tryOpenMapScreen {
+                                                screen = WewScreen.Map
+                                            }
+                                        },
                                         onOpenCalendar = { pkg ->
-                                            val intent = packageManager.getLaunchIntentForPackage(pkg)
-                                                ?: Intent(Intent.ACTION_MAIN).apply {
-                                                    addCategory(Intent.CATEGORY_APP_CALENDAR)
-                                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                                }
-                                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                            startActivity(intent)
+                                            convListViewModel.tryOpenApprovedExternalApp(pkg) {
+                                                val intent = packageManager.getLaunchIntentForPackage(pkg)
+                                                    ?: Intent(Intent.ACTION_MAIN).apply {
+                                                        addCategory(Intent.CATEGORY_APP_CALENDAR)
+                                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                                    }
+                                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                                startActivity(intent)
+                                            }
                                         },
                                         onOpenWeather = { pkg ->
                                             val intent = packageManager.getLaunchIntentForPackage(pkg)
                                                 ?: return@ConversationListScreen
-                                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                            startActivity(intent)
+                                            convListViewModel.tryOpenApprovedExternalApp(pkg) {
+                                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                                startActivity(intent)
+                                            }
                                         },
                                         onOpenApp = { pkg ->
                                             val intent = packageManager.getLaunchIntentForPackage(pkg)
                                                 ?: return@ConversationListScreen
-                                            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                            startActivity(intent)
+                                            convListViewModel.tryOpenApprovedExternalApp(pkg) {
+                                                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                                startActivity(intent)
+                                            }
                                         }
                                     )
 

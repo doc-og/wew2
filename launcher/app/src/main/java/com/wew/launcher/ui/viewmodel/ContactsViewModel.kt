@@ -4,10 +4,11 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.wew.launcher.data.model.ContactAuthRequest
+import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.WewContact
 import com.wew.launcher.data.model.isApprovedForComms
 import com.wew.launcher.data.repository.DeviceRepository
+import com.wew.launcher.token.TokenEngine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -77,7 +78,9 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
 
     fun createContact(name: String, phone: String?, email: String?, address: String?, notes: String?) {
         val deviceId = _uiState.value.deviceId
+        if (deviceId.isEmpty()) return
         viewModelScope.launch {
+            if (!payAttentionOrAbort(deviceId)) return@launch
             val contactId = repo.createContact(deviceId, name, phone, email, address, null, notes)
             if (contactId != null) {
                 repo.requestContactAuthorization(deviceId, contactId)
@@ -98,6 +101,7 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
         val deviceId = _uiState.value.deviceId
         val contactId = contact.id ?: return
         viewModelScope.launch {
+            if (!payAttentionOrAbort(deviceId)) return@launch
             repo.requestContactAuthorization(deviceId, contactId)
             _uiState.update { it.copy(successMessage = "Authorization request sent to parent") }
             load()
@@ -106,5 +110,22 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
 
     fun clearMessages() {
         _uiState.update { it.copy(error = null, successMessage = null) }
+    }
+
+    private suspend fun payAttentionOrAbort(deviceId: String): Boolean {
+        val cost = TokenEngine.calculateCost(ActionType.CONTACT_ATTENTION_ACTION)
+        if (cost <= 0) return true
+        val r = repo.consumeTokens(
+            deviceId = deviceId,
+            amount = cost,
+            actionType = ActionType.CONTACT_ATTENTION_ACTION.value,
+            appName = "Contacts"
+        )
+        return if (r.isFailure) {
+            _uiState.update { it.copy(error = "not enough tokens") }
+            false
+        } else {
+            true
+        }
     }
 }

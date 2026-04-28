@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.wew.launcher.data.TokenBalanceCache
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.composedDisplayName
 import com.wew.launcher.data.repository.DeviceRepository
@@ -120,6 +121,7 @@ class ChatViewModel(
     private val repo = DeviceRepository(application)
     private val smsRepo = SmsRepository(application)
     private val prefs = application.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+    private val initialTokenSnapshot = TokenBalanceCache.readSnapshot(prefs)
 
     /** Mutable so we can update after sending the first message of a new thread. */
     private var currentThreadId: Long = initialThreadId
@@ -144,7 +146,10 @@ class ChatViewModel(
             },
             selectedRecipients = initialRecipients,
             isGroup = initialIsGroup || initialRecipients.size > 1,
-            unapprovedParticipantLabels = initialUnapprovedParticipantLabels
+            unapprovedParticipantLabels = initialUnapprovedParticipantLabels,
+            currentTokens = initialTokenSnapshot.first,
+            dailyTokenBudget = initialTokenSnapshot.second,
+            tokensExhausted = initialTokenSnapshot.first <= 0
         )
     )
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -238,8 +243,8 @@ class ChatViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             runCatching {
-                val items = buildChatItems(deviceId)
                 val device = repo.getDevice(deviceId)
+                val items = buildChatItems(deviceId)
                 _uiState.update {
                     it.copy(
                         chatItems = items,

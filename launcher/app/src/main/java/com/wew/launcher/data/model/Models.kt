@@ -112,6 +112,19 @@ enum class ActionType(val value: String) {
     // Contacts
     CONTACT_REQUESTED("contact_requested"),
     CONTACT_QUARANTINED("contact_quarantined"),
+    /** Child submitted a new contact or asked parent to authorize one (attention on device). */
+    CONTACT_ATTENTION_ACTION("contact_attention_action"),
+    // Launcher chrome (messages UI, nav, map open, etc.)
+    SMS_THREAD_MARK_READ("sms_thread_mark_read"),
+    SMS_THREAD_MARK_UNREAD("sms_thread_mark_unread"),
+    CONVERSATION_META_CHANGED("conversation_meta_changed"),
+    SMS_THREAD_DELETE("sms_thread_deleted"),
+    /** Opening an existing thread or the new-message composer. */
+    CHAT_SURFACE_OPEN("chat_surface_open"),
+    /** Contacts or Check In overlay from the nav sheet. */
+    LAUNCHER_OVERLAY_OPEN("launcher_overlay_open"),
+    /** Opening the in-launcher map flow (separate from check-in safety submit). */
+    MAP_SESSION("map_session"),
     // System / security
     SETTINGS_TAMPER("settings_tamper"),
     DEVICE_ADMIN_REVOKED("device_admin_revoked"),

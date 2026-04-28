@@ -33,13 +33,13 @@ have no mechanical effect on the next day's budget.
 
 ## Budget Calibration Target
 
-The system is calibrated so that **~150 discrete actions exhaust the 10,000-token daily budget**,
-giving an effective average cost of ~66 tokens per action.
+The system is calibrated so that **~75 discrete actions exhaust the 10,000-token daily budget**
+under current engine defaults, giving an effective average cost of roughly **130 tokens per
+action** for that mix.
 
-Costs were rebalanced to burn the daily budget roughly **5x faster** than the original calibration
-(which targeted ~750 actions). The new ceiling represents a tighter share of the average adult
-daily phone session — appropriate for children aged 8–12 during parent-scheduled active hours, and
-makes each action feel more consequential to the child.
+Costs were doubled from the prior table so each billed action consumes more aggressively; passive
+consumption still costs materially more than active creation per [Cost Hierarchy](#cost-hierarchy).
+The daily ceiling stays at 10,000 unless the parent raises it per device.
 
 ---
 
@@ -51,11 +51,11 @@ behaviour. Active creation (messaging, photos) sits in the middle. Navigation si
 
 ```
 Tier 0  — Free (0)                Safety events, SOS, check-ins, monitoring signals
-Tier 1  — Minimal (40–125)        Short web lookups, audio streaming, MMS
-Tier 2  — Standard (65–150)       App opens, SMS, web session entry
-Tier 3  — Significant (250–750)   Game sessions, photos, calls, social scrolling
-Tier 4  — High drain (750+ base + high/min)  Video watching, video calls
-Tier 5  — Privilege (2,500 flat)  Temporary access grants (bypass of an app block)
+Tier 1  — Minimal (80–250)       Short web lookups, audio streaming, MMS
+Tier 2  — Standard (130–300)      App opens, SMS, web session entry
+Tier 3  — Significant (500–1,500) Game sessions, photos, calls, social scrolling
+Tier 4  — High drain (1,500+ base + high/min)  Video watching, video calls
+Tier 5  — Privilege (5,000 flat)  Temporary access grants (bypass of an app block)
 ```
 
 ---
@@ -66,24 +66,42 @@ Tier 5  — Privilege (2,500 flat)  Temporary access grants (bypass of an app bl
 
 | Action | Tokens | Notes |
 |---|---|---|
-| App open | 65 | Most frequent action; primary lever for hitting the 150-action target |
-| SMS sent | 50 | Active communication — lower cost than passive consumption |
-| MMS sent | 125 | Slightly above SMS; usually a photo attached to a message |
-| Photo taken | 250 | Creative/productive action; not penalised as heavily as passive media |
-| Temporary access granted | 2,500 | Intentionally high — this is a privilege bypass |
+| App open | 130 | Most frequent action; scales with broader daily pacing |
+| SMS sent | 100 | Active communication — lower cost than passive consumption |
+| MMS sent | 250 | Slightly above SMS; usually a photo attached to a message |
+| Photo taken | 500 | Creative/productive action; not penalised as heavily as passive media |
+| Temporary access granted | 5,000 | Intentionally high — this is a privilege bypass |
+
+### Launcher chrome (threads, nav, contacts)
+
+Default **130 tokens** each unless the parent overrides in `token_action_costs`. Implemented in
+`launcher/.../token/TokenEngine.kt` as separate `action_type` strings for the ledger.
+
+| Child gesture | `action_type` |
+|---|---|
+| Mark thread read / unread (swipe or menu) | `sms_thread_mark_read`, `sms_thread_mark_unread` |
+| Mute/unmute or delete thread | `conversation_meta_changed`, `sms_thread_delete` |
+| Open a thread or tap compose | `chat_surface_open` |
+| Contacts or Check In overlay | `launcher_overlay_open` |
+| Open Map from menu | `map_session` |
+| Launch calendar / weather / approved app from nav | `app_open` |
+| Add contact or request authorization | `contact_attention_action` |
+| Open parent app after passcode | `app_open` |
+
+Opening a thread pays **`chat_surface_open`** once; syncing read state in the background does not add a second `sms_thread_mark_read` charge (swipe/menu still bill those keys).
 
 ### Time-based actions (base + per-minute rate)
 
 | Action | Base | Per Minute | Example: 10 min | Example: 30 min |
 |---|---|---|---|---|
-| Web session | 150 | +100 | 1,150 | 3,150 |
-| Call received | 0 | +250 | 2,500 | 7,500 |
-| Call made | 500 | +250 | 3,000 | 8,000 |
-| Video call | 375 | +375 | 4,125 | 11,625 |
-| Audio streamed | 100 | +40 | 500 | 1,300 |
-| Game session | 375 | +200 | 2,375 | 6,375 |
-| Social scroll | 250 | +125 | 1,500 | 4,000 |
-| Video watched | 750 | +500 | 5,750 | 15,750 |
+| Web session | 300 | +200 | 2,300 | 6,300 |
+| Call received | 0 | +500 | 5,000 | 15,000 |
+| Call made | 1,000 | +500 | 6,000 | 16,000 |
+| Video call | 750 | +750 | 8,250 | 23,250 |
+| Audio streamed | 200 | +80 | 1,000 | 2,600 |
+| Game session | 750 | +400 | 4,750 | 12,750 |
+| Social scroll | 500 | +250 | 3,000 | 8,000 |
+| Video watched | 1,500 | +1,000 | 11,500 | 31,500 |
 
 ### Free actions (always 0 tokens)
 
@@ -162,6 +180,7 @@ educational video content, or make `GAME_SESSION` more expensive for a child who
 | File | Role |
 |---|---|
 | `launcher/app/src/main/java/com/wew/launcher/token/TokenEngine.kt` | Cost table and consume/canAfford logic |
+| `launcher/app/src/main/java/com/wew/launcher/data/TokenBalanceCache.kt` | Last-known `devices` token snapshot for cold-start chip accuracy |
 | `launcher/app/src/main/java/com/wew/launcher/data/model/Models.kt` | `ActionType` enum, `TokenLedger`, `TokenBudget`, `TokenRequest` models |
 | `launcher/app/src/main/java/com/wew/launcher/service/LauncherForegroundService.kt` | Schedule locks; foreground media sessions → token deductions |
 | `supabase/migrations/007_tokens_and_chat.sql` | DB schema: `token_ledger`, `token_budgets`, `token_action_costs`, `token_requests` |

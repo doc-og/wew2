@@ -12,6 +12,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.wew.launcher.data.TokenBalanceCache
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.AppInfo
@@ -53,11 +54,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repo = DeviceRepository(application)
     private val appContext = application.applicationContext
+    private val prefs = application.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+    private val initialTokenSnapshot = TokenBalanceCache.readSnapshot(prefs)
 
-    private val _uiState = MutableStateFlow(HomeUiState())
+    private val _uiState = MutableStateFlow(
+        HomeUiState(
+            currentTokens = initialTokenSnapshot.first,
+            dailyTokenBudget = initialTokenSnapshot.second,
+            tokensExhausted = initialTokenSnapshot.first <= 0
+        )
+    )
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
-    private val prefs = application.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
     private val badgeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             _uiState.update {
@@ -90,11 +98,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             runCatching {
-                repo.syncAppListIfStale(deviceId, getApplication(), force = true)
                 val device = repo.getDevice(deviceId)
                 device.timezone.takeIf { it.isNotBlank() }?.let {
                     prefs.edit().putString("device_timezone", it).apply()
                 }
+                repo.syncAppListIfStale(deviceId, getApplication(), force = true)
                 val appPolicies = repo.getAppPolicies(deviceId)
                 NotificationPolicyStore.writePolicies(appContext, appPolicies)
                 val appInfoList = buildWhitelistedAppList(appPolicies)

@@ -6,9 +6,8 @@ import kotlin.math.max
 /**
  * TokenEngine — default costs match [TOKEN_SYSTEM.md] (parent overrides via token_action_costs).
  *
- * Costs were re-calibrated to burn the 10,000-token daily budget roughly 5x faster than the
- * original table — target ~150 discrete actions/day instead of ~750. Free (safety) actions stay
- * at 0; only billable costs are scaled. See TOKEN_SYSTEM.md for the full cost table.
+ * Default costs burn the daily budget faster — ~75 discrete average actions per 10,000-token
+ * day after the latest 2× multiplier (parent overrides in `token_action_costs` still apply).
  */
 object TokenEngine {
 
@@ -26,24 +25,33 @@ object TokenEngine {
         val newBalance: Int
     )
 
+    /** Engine defaults match [TOKEN_SYSTEM.md] — 2× the prior table so each action consumes more. */
     val defaults: Map<ActionType, ActionCost> = mapOf(
-        ActionType.SMS_SENT to ActionCost(50),
-        ActionType.MMS_SENT to ActionCost(125),
-        ActionType.CALL_MADE to ActionCost(500, 250, UnitType.PER_MINUTE),
-        ActionType.CALL_RECEIVED to ActionCost(0, 250, UnitType.PER_MINUTE),
-        ActionType.VIDEO_CALL_MADE to ActionCost(375, 375, UnitType.PER_MINUTE),
-        ActionType.PHOTO_TAKEN to ActionCost(250),
-        ActionType.WEB_SESSION to ActionCost(150, 100, UnitType.PER_MINUTE),
-        ActionType.APP_OPEN to ActionCost(65),
-        ActionType.TEMP_ACCESS_GRANTED to ActionCost(2500),
-        ActionType.VIDEO_WATCHED to ActionCost(750, 500, UnitType.PER_MINUTE),
-        ActionType.GAME_SESSION to ActionCost(375, 200, UnitType.PER_MINUTE),
-        ActionType.SOCIAL_SCROLL to ActionCost(250, 125, UnitType.PER_MINUTE),
-        ActionType.AUDIO_STREAMED to ActionCost(100, 40, UnitType.PER_MINUTE),
+        ActionType.SMS_SENT to ActionCost(100),
+        ActionType.MMS_SENT to ActionCost(250),
+        ActionType.CALL_MADE to ActionCost(1000, 500, UnitType.PER_MINUTE),
+        ActionType.CALL_RECEIVED to ActionCost(0, 500, UnitType.PER_MINUTE),
+        ActionType.VIDEO_CALL_MADE to ActionCost(750, 750, UnitType.PER_MINUTE),
+        ActionType.PHOTO_TAKEN to ActionCost(500),
+        ActionType.WEB_SESSION to ActionCost(300, 200, UnitType.PER_MINUTE),
+        ActionType.APP_OPEN to ActionCost(130),
+        ActionType.TEMP_ACCESS_GRANTED to ActionCost(5000),
+        ActionType.VIDEO_WATCHED to ActionCost(1500, 1000, UnitType.PER_MINUTE),
+        ActionType.GAME_SESSION to ActionCost(750, 400, UnitType.PER_MINUTE),
+        ActionType.SOCIAL_SCROLL to ActionCost(500, 250, UnitType.PER_MINUTE),
+        ActionType.AUDIO_STREAMED to ActionCost(200, 80, UnitType.PER_MINUTE),
         ActionType.CHECK_IN to ActionCost(0),
         ActionType.TOKEN_REQUEST to ActionCost(0),
         ActionType.URL_BLOCKED to ActionCost(0),
         ActionType.APP_BLOCKED to ActionCost(0),
+        ActionType.SMS_THREAD_MARK_READ to ActionCost(130),
+        ActionType.SMS_THREAD_MARK_UNREAD to ActionCost(130),
+        ActionType.CONVERSATION_META_CHANGED to ActionCost(130),
+        ActionType.SMS_THREAD_DELETE to ActionCost(130),
+        ActionType.CHAT_SURFACE_OPEN to ActionCost(130),
+        ActionType.LAUNCHER_OVERLAY_OPEN to ActionCost(130),
+        ActionType.MAP_SESSION to ActionCost(130),
+        ActionType.CONTACT_ATTENTION_ACTION to ActionCost(130),
         ActionType.SETTINGS_TAMPER to ActionCost(0),
         ActionType.DEVICE_ADMIN_REVOKED to ActionCost(0),
         ActionType.LOCK_ACTIVATED to ActionCost(0),

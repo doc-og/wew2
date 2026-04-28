@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.wew.launcher.data.TokenBalanceCache
 import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.UrlFilter
 import com.wew.launcher.data.repository.DeviceRepository
@@ -52,10 +53,19 @@ class WebViewModel(
 
     private val repo = DeviceRepository(application)
     private val prefs = application.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+    private val initialTokenSnapshot = TokenBalanceCache.readSnapshot(prefs)
 
     private var filters: List<UrlFilter> = emptyList()
 
-    private val _uiState = MutableStateFlow(WebUiState(initialUrl = initialUrl, currentUrl = initialUrl))
+    private val _uiState = MutableStateFlow(
+        WebUiState(
+            initialUrl = initialUrl,
+            currentUrl = initialUrl,
+            currentTokens = initialTokenSnapshot.first,
+            dailyTokenBudget = initialTokenSnapshot.second,
+            tokensExhausted = initialTokenSnapshot.first <= 0
+        )
+    )
     val uiState: StateFlow<WebUiState> = _uiState.asStateFlow()
 
     init {
@@ -68,8 +78,8 @@ class WebViewModel(
         val deviceId = prefs.getString("device_id", null) ?: return
         viewModelScope.launch {
             runCatching {
-                filters = repo.getUrlFilters(deviceId)
                 val device = repo.getDevice(deviceId)
+                filters = repo.getUrlFilters(deviceId)
                 _uiState.update {
                     it.copy(
                         isLoading = false,

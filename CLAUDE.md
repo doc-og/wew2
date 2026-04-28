@@ -14,6 +14,7 @@ Wew is a **parental-control Android launcher** for children about **8–12**. It
 4. **Smallest shippable change.** One user-visible improvement per PR; no speculative abstractions.
 5. **Leftover tokens are fine.** Daily reset is unconditional — under-spending is expected and healthy, not punished.
 6. **Parents tune, the engine defaults.** Defaults are calibrated for 8–12-year-olds; overrides exist for edge cases.
+7. **Snappy, honest UI.** Prefer optimistic updates and immediate feedback where failures are recoverable and safety is not misrepresented (balances and safety-critical flows stay truthful).
 
 See [TOKEN_SYSTEM.md](TOKEN_SYSTEM.md) for token economics.
 
@@ -177,6 +178,25 @@ Critical HUD (e.g. **token chip** on dark background) must meet **WCAG AA contra
 - Overlay screens (Contacts, CheckIn) use `if (showX) { XScreen(...) }` stacked in the `ConversationList` branch.
 - Dialogs: `AlertDialog` for confirmations (SOS, call), `Dialog(usePlatformDefaultWidth = false)` for full-screen overlays (contact detail, image viewer).
 
+### Optimistic UI and snappy feel
+
+Use **optimistic UI** wherever the user reasonably expects instant feedback and a failed write can be surfaced and corrected without harming safety.
+
+**Good candidates:** outgoing chat messages (show immediately; reconcile temp ids when insert completes), UI toggles and local chrome (pending vs approved styling), navigation after a tap when the destination does not depend on fresh server data, clearing input fields after send, cache-first display while refresh runs.
+
+**Avoid optimism when:** the UI must reflect server authority before acting (token balance enforcement, passcode checks), irreversible or safety-critical outcomes, or when lying would confuse SOS/check-in/medical-adjacent flows.
+
+**Implementation sketch:** apply changes to **`UiState` / local store first**, fire the repository call, then **replace** optimistic rows with server rows or **revert** and show a clear error. Log failures; do not discard user intent silently.
+
+**Perceived speed (launcher, parent app, dashboard):**
+
+- Prefer **immediate visual response** on tap (pressed state, short transitions) over waiting for network round-trips to advance ordinary flows.
+- Use **inline** loading (row spinner, “sending…”) instead of blocking whole screens for routine writes; reserve full-screen blocking for genuine cold loads or ambiguous failures.
+- **Skeleton / cached data:** show last-known tokens, cached threads, or placeholders quickly; refresh in the background.
+- **Lists:** lazy scrolling with **stable keys**; avoid heavy work in composition tied to scroll.
+- **Forms:** disable duplicate submits while in-flight; debounce search-as-you-type.
+- **Web dashboard:** same posture — optimistic local state with rollback or toast-on-error; prefer invalidate/refetch patterns that do not blank the UI unnecessarily.
+
 ### Chat / InputBar keyboard handling
 
 - The outer `Column` in `ChatScreen` has `statusBarsPadding()` only (NOT `navigationBarsPadding()`).
@@ -208,6 +228,7 @@ Critical HUD (e.g. **token chip** on dark background) must meet **WCAG AA contra
 
 - **MVVM**, **Compose-only** UI for new work.
 - **One `UiState` data class** per screen; expose **`StateFlow`**, not raw mutable flows.
+- **Optimistic UI:** default to snappy feedback for mutations when safe (see **Optimistic UI and snappy feel**); reconcile or revert on errors.
 - **Smallest user-visible change** per PR; no speculative abstractions.
 - **Comments** explain *why*, not *what*.
 - **User-facing strings:** plain English, lowercase-friendly, parent- and child-appropriate; no jargon.

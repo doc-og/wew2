@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import com.wew.launcher.data.SupabaseClient
+import com.wew.launcher.data.TokenBalanceCache
 import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.AppRecord
 import com.wew.launcher.data.model.ContactAuthRequest
@@ -40,9 +41,15 @@ class DeviceRepository(private val context: Context) {
     // ── Device ────────────────────────────────────────────────────────────────
 
     suspend fun getDevice(deviceId: String): Device {
-        return supabase.postgrest["devices"]
+        val device = supabase.postgrest["devices"]
             .select(Columns.ALL) { filter { eq("id", deviceId) } }
-            .decodeSingle()
+            .decodeSingle<Device>()
+        TokenBalanceCache.write(
+            context.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE),
+            device.currentTokens,
+            device.dailyTokenBudget
+        )
+        return device
     }
 
     suspend fun updateFcmToken(deviceId: String, token: String) {
@@ -160,6 +167,11 @@ class DeviceRepository(private val context: Context) {
             )
         )
 
+        TokenBalanceCache.write(
+            context.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE),
+            newBalance,
+            device.dailyTokenBudget
+        )
         newBalance
     }
 
@@ -178,6 +190,11 @@ class DeviceRepository(private val context: Context) {
                     put("tokens_consumed", -amount)   // negative = credit
                     put("balance_after", newBalance)
                 }
+            )
+            TokenBalanceCache.write(
+                context.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE),
+                newBalance,
+                device.dailyTokenBudget
             )
         }.onFailure { Log.e("WewTokens", "addTokens failed: ${it.message}") }
     }

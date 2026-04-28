@@ -8,7 +8,6 @@ import androidx.lifecycle.viewModelScope
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
-import com.wew.launcher.data.model.ActionType
 import com.wew.launcher.data.model.LocationLog
 import com.wew.launcher.data.repository.DeviceRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,12 +68,6 @@ class MapViewModel(application: Application) : AndroidViewModel(application) {
         val deviceId = prefs.getString("device_id", null) ?: return
         viewModelScope.launch {
             runCatching {
-                repo.consumeTokens(
-                    deviceId = deviceId,
-                    amount = 5,
-                    actionType = ActionType.CHECK_IN.value,
-                    appName = "Map"
-                )
                 repo.logLocation(LocationLog(deviceId = deviceId, latitude = lat, longitude = lng))
             }.onFailure { Log.w("MapVM", "logLocation failed: ${it.message}") }
         }

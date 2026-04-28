@@ -8,7 +8,9 @@ import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.wew.launcher.data.TokenBalanceCache
 import com.wew.launcher.data.model.ActionType
+import com.wew.launcher.data.model.Device
 import com.wew.launcher.data.model.ActivityLog
 import com.wew.launcher.data.model.ConversationMeta
 import com.wew.launcher.data.model.composedDisplayName
@@ -18,6 +20,7 @@ import com.wew.launcher.data.repository.DeviceRepository
 import com.wew.launcher.sms.SmsRepository
 import com.wew.launcher.sms.SmsThread
 import com.wew.launcher.telecom.DeviceLine
+import com.wew.launcher.token.TokenEngine
 import com.wew.launcher.telecom.PhoneMatch
 import com.wew.launcher.telecom.WewPhoneAllowlist
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,6 +81,8 @@ data class ConversationListUiState(
     val currentTokens: Int = 10000,
     val dailyTokenBudget: Int = 10000,
     val tokensExhausted: Boolean = false,
+    /** Shown briefly when an action fails for lack of tokens; cleared automatically in UI. */
+    val tokenActionMessage: String? = null,
     val deviceId: String = "",
     val parentPhoneNumber: String? = null,
     val parentName: String? = null,
@@ -127,6 +132,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     private val repo = DeviceRepository(application)
     private val smsRepo = SmsRepository(application)
     private val prefs = application.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
+    private val initialTokenSnapshot = TokenBalanceCache.readSnapshot(prefs)
 
     /**
      * Only one list refresh at a time — SMS observer + load() must not overlap.
@@ -137,7 +143,13 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
      */
     private val listRefreshMutex = Mutex()
 
-    private val _uiState = MutableStateFlow(ConversationListUiState())
+    private val _uiState = MutableStateFlow(
+        ConversationListUiState(
+            currentTokens = initialTokenSnapshot.first,
+            dailyTokenBudget = initialTokenSnapshot.second,
+            tokensExhausted = initialTokenSnapshot.first <= 0
+        )
+    )
     val uiState: StateFlow<ConversationListUiState> = _uiState.asStateFlow()
 
     init {
@@ -231,9 +243,17 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         }
         viewModelScope.launch {
             runCatching {
+                val deviceFresh = repo.getDevice(deviceId)
+                _uiState.update {
+                    it.copy(
+                        currentTokens = deviceFresh.currentTokens,
+                        dailyTokenBudget = deviceFresh.dailyTokenBudget,
+                        tokensExhausted = deviceFresh.currentTokens <= 0
+                    )
+                }
                 repo.syncAppListIfStale(deviceId, getApplication())
                 listRefreshMutex.withLock {
-                    applyConversationList(deviceId)
+                    applyConversationList(deviceId, deviceFresh)
                 }
             }.onFailure {
                 Log.e("ConvListVM", "load failed: ${it.message}")
@@ -252,9 +272,12 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     /**
      * Loads threads, keeps only conversations where every remote participant is the parent
      * or a contact the parent approved in the parent app; deletes other threads from the device.
+     *
+     * @param prefetchedDevice when non-null (from [load]'s eager [DeviceRepository.getDevice]),
+     * avoids a redundant device fetch — token fields already match this row.
      */
-    private suspend fun applyConversationList(deviceId: String) {
-        val device = repo.getDevice(deviceId)
+    private suspend fun applyConversationList(deviceId: String, prefetchedDevice: Device? = null) {
+        val device = prefetchedDevice ?: repo.getDevice(deviceId)
         val approvedContacts = repo.getContacts(deviceId).filter { it.isApprovedForComms() }
         val conversationMeta = repo.getConversationMeta(deviceId)
         val metaByThread = conversationMeta.associateBy { it.threadId }
@@ -511,6 +534,87 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
+    // ── Token-gated launcher chrome (see ActionType thread / nav helpers) ──────
+
+    fun clearTokenActionMessage() = _uiState.update { it.copy(tokenActionMessage = null) }
+
+    private suspend fun payForLauncherAction(
+        deviceId: String,
+        action: ActionType,
+        appName: String = "wew",
+        appPackage: String? = null
+    ): Boolean {
+        val cost = TokenEngine.calculateCost(action)
+        if (cost <= 0) return true
+        val balanceResult = repo.consumeTokens(
+            deviceId = deviceId,
+            amount = cost,
+            actionType = action.value,
+            appPackage = appPackage,
+            appName = appName
+        )
+        return if (balanceResult.isSuccess) {
+            balanceResult.getOrNull()?.let { b ->
+                _uiState.update { s ->
+                    s.copy(
+                        currentTokens = b,
+                        tokensExhausted = b <= 0,
+                        tokenActionMessage = null
+                    )
+                }
+            }
+            true
+        } else {
+            Log.w("ConvListVM", "payForLauncherAction failed: ${balanceResult.exceptionOrNull()?.message}")
+            _uiState.update { s ->
+                s.copy(tokenActionMessage = "not enough tokens for that.")
+            }
+            false
+        }
+    }
+
+    /** Opening a thread or the new-message composer from the main list. */
+    fun tryOpenChatEntry(onConsumed: () -> Unit) {
+        val deviceId = prefs.getString("device_id", null) ?: return
+        viewModelScope.launch {
+            if (!payForLauncherAction(deviceId, ActionType.CHAT_SURFACE_OPEN)) return@launch
+            onConsumed()
+        }
+    }
+
+    /** Contacts or Check In overlay. */
+    fun tryOpenLauncherOverlay(onConsumed: () -> Unit) {
+        val deviceId = prefs.getString("device_id", null) ?: return
+        viewModelScope.launch {
+            if (!payForLauncherAction(deviceId, ActionType.LAUNCHER_OVERLAY_OPEN)) return@launch
+            onConsumed()
+        }
+    }
+
+    fun tryOpenMapScreen(onConsumed: () -> Unit) {
+        val deviceId = prefs.getString("device_id", null) ?: return
+        viewModelScope.launch {
+            if (!payForLauncherAction(deviceId, ActionType.MAP_SESSION, appName = "map")) return@launch
+            onConsumed()
+        }
+    }
+
+    fun tryOpenApprovedExternalApp(packageName: String, onConsumed: () -> Unit) {
+        val deviceId = prefs.getString("device_id", null) ?: return
+        viewModelScope.launch {
+            if (!payForLauncherAction(
+                    deviceId = deviceId,
+                    action = ActionType.APP_OPEN,
+                    appName = "approved app",
+                    appPackage = packageName
+                )
+            ) {
+                return@launch
+            }
+            onConsumed()
+        }
+    }
+
     // ── Thread actions ────────────────────────────────────────────────────────
 
     fun onLongPress(item: ConversationItem) {
@@ -523,10 +627,12 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
     fun muteThread(item: ConversationItem) {
         viewModelScope.launch {
-            val state = _uiState.value
+            val resolvedDeviceId = _uiState.value.deviceId.takeIf { it.isNotEmpty() }
+                ?: prefs.getString("device_id", null) ?: return@launch
+            if (!payForLauncherAction(resolvedDeviceId, ActionType.CONVERSATION_META_CHANGED)) return@launch
             repo.upsertConversationMeta(
                 ConversationMeta(
-                    deviceId = state.deviceId,
+                    deviceId = resolvedDeviceId,
                     threadId = item.thread.threadId.toString(),
                     displayName = item.resolvedName,
                     isPinned = false,
@@ -540,10 +646,12 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
     fun unmuteThread(item: ConversationItem) {
         viewModelScope.launch {
-            val state = _uiState.value
+            val resolvedDeviceId = _uiState.value.deviceId.takeIf { it.isNotEmpty() }
+                ?: prefs.getString("device_id", null) ?: return@launch
+            if (!payForLauncherAction(resolvedDeviceId, ActionType.CONVERSATION_META_CHANGED)) return@launch
             repo.upsertConversationMeta(
                 ConversationMeta(
-                    deviceId = state.deviceId,
+                    deviceId = resolvedDeviceId,
                     threadId = item.thread.threadId.toString(),
                     displayName = item.resolvedName,
                     isPinned = false,
@@ -568,10 +676,12 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
      */
     fun markThreadReadOptimisticFromChat(threadId: Long) {
         if (threadId == -1L) return
-        viewModelScope.launch { markReadPipeline(threadId) }
+        viewModelScope.launch { markReadPipeline(threadId, chargeReadTokens = false) }
     }
 
-    private suspend fun markReadPipeline(threadId: Long) {
+    private suspend fun markReadPipeline(threadId: Long, chargeReadTokens: Boolean = true) {
+        val deviceId = prefs.getString("device_id", null) ?: return
+        if (chargeReadTokens && !payForLauncherAction(deviceId, ActionType.SMS_THREAD_MARK_READ)) return
         _uiState.update {
             it.copy(threadUnreadOverrides = it.threadUnreadOverrides + (threadId to 0))
         }
@@ -612,11 +722,17 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         if (threadId == -1L) return
         viewModelScope.launch {
             val snap = _uiState.value
+            val deviceId = prefs.getString("device_id", null) ?: return@launch
             val conversation = snap.conversations.find { it.thread.threadId == threadId }
                 ?: return@launch
             val effectiveUnread =
                 snap.threadUnreadOverrides.getOrElse(threadId) { conversation.thread.unreadCount }
             val willMarkRead = effectiveUnread > 0
+            if (willMarkRead) {
+                if (!payForLauncherAction(deviceId, ActionType.SMS_THREAD_MARK_READ)) return@launch
+            } else {
+                if (!payForLauncherAction(deviceId, ActionType.SMS_THREAD_MARK_UNREAD)) return@launch
+            }
             val optimisticUnread = if (willMarkRead) 0 else 1
 
             _uiState.update {
@@ -657,6 +773,9 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 dismissContextMenu()
                 return@launch
             }
+            val resolvedDeviceId = _uiState.value.deviceId.takeIf { it.isNotEmpty() }
+                ?: prefs.getString("device_id", null) ?: return@launch
+            if (!payForLauncherAction(resolvedDeviceId, ActionType.SMS_THREAD_DELETE)) return@launch
             smsRepo.deleteThread(item.thread.threadId)
             dismissContextMenu()
             load()
@@ -697,12 +816,21 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         if (state.deviceId.isEmpty()) return
         viewModelScope.launch {
             val record = repo.getDevicePasscode(state.deviceId)
+            suspend fun launchParent(): Boolean =
+                payForLauncherAction(
+                    deviceId = state.deviceId,
+                    action = ActionType.APP_OPEN,
+                    appName = "parent app",
+                    appPackage = "com.wew.parent"
+                )
             if (record == null) {
+                if (!launchParent()) return@launch
                 _uiState.update { it.copy(showParentPasscode = false, pendingLaunchParentApp = true) }
                 return@launch
             }
             val hash = hashPin(state.deviceId, pin)
             if (hash == record.passcodeHash) {
+                if (!launchParent()) return@launch
                 _uiState.update { it.copy(showParentPasscode = false, pendingLaunchParentApp = true) }
             } else {
                 val remaining = state.passcodeAttemptsLeft - 1
