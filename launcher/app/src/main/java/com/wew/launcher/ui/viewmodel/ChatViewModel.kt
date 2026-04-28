@@ -109,7 +109,12 @@ class ChatViewModel(
      * from the conversation list. Non-empty only when opening an existing thread
      * (not compose mode). Used as the primary send target list for group replies.
      */
-    private val initialRecipientAddresses: List<String> = emptyList()
+    private val initialRecipientAddresses: List<String> = emptyList(),
+    /**
+     * When non-null (chat opened from the launcher), marking the thread read uses
+     * the same optimistic list-row update as the conversation list gestures.
+     */
+    private val conversationListViewModel: ConversationListViewModel? = null,
 ) : AndroidViewModel(application) {
 
     private val repo = DeviceRepository(application)
@@ -153,12 +158,19 @@ class ChatViewModel(
     /**
      * Marks the open thread as read in the SMS provider so the conversation list
      * immediately reflects that the user has seen it. Safe to call even if the
-     * thread id is -1 (compose mode): we no-op. Triggering the content observer
-     * refreshes the conversation list automatically.
+     * thread id is -1 (compose mode): we no-op.
+     *
+     * When launched from [MainActivity] with a shared [conversationListViewModel],
+     * the list applies the same optimistic + targeted reconcile as "mark read" there.
      */
     private fun markCurrentThreadRead() {
         val tid = currentThreadId
         if (tid == -1L) return
+        val conv = conversationListViewModel
+        if (conv != null) {
+            conv.markThreadReadOptimisticFromChat(tid)
+            return
+        }
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 runCatching { smsRepo.markThreadRead(tid) }
@@ -616,7 +628,8 @@ class ChatViewModel(
             initialRecipients: List<com.wew.launcher.data.model.WewContact> = emptyList(),
             initialIsGroup: Boolean = false,
             initialUnapprovedParticipantLabels: List<String> = emptyList(),
-            initialRecipientAddresses: List<String> = emptyList()
+            initialRecipientAddresses: List<String> = emptyList(),
+            conversationListViewModel: ConversationListViewModel? = null
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
@@ -629,7 +642,8 @@ class ChatViewModel(
                     initialRecipients,
                     initialIsGroup,
                     initialUnapprovedParticipantLabels,
-                    initialRecipientAddresses
+                    initialRecipientAddresses,
+                    conversationListViewModel
                 ) as T
         }
     }

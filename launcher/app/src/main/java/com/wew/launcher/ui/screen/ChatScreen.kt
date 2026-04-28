@@ -176,7 +176,8 @@ fun ChatScreen(
             initialRecipients = emptyList(),
             initialIsGroup = isGroup,
             initialUnapprovedParticipantLabels = unapprovedParticipantLabels,
-            initialRecipientAddresses = participantAddresses
+            initialRecipientAddresses = participantAddresses,
+            conversationListViewModel = conversationListViewModel
         )
     )
     val state by vm.uiState.collectAsState()

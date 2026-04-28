@@ -255,11 +255,7 @@ class MainActivity : ComponentActivity() {
                                         displayName = s.displayName,
                                         mergeSystemSummaries = !s.isNewCompose && s.isParent,
                                         composeSession = s.composeSession,
-                                        conversationListViewModel = if (s.isNewCompose) {
-                                            convListViewModel
-                                        } else {
-                                            null
-                                        },
+                                        conversationListViewModel = convListViewModel,
                                         isGroup = s.isGroup,
                                         unapprovedParticipantLabels = s.unapprovedParticipantLabels,
                                         participantAddresses = s.participantAddresses,

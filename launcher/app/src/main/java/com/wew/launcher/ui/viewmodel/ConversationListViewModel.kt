@@ -23,6 +23,7 @@ import com.wew.launcher.telecom.WewPhoneAllowlist
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.Dispatchers
@@ -99,6 +100,11 @@ data class ConversationListUiState(
     /** Package name of the whitelisted weather app, null if not approved. */
     val approvedWeatherPackage: String? = null,
     /**
+     * Optimistic unread counts per thread (threadId → count) applied until the SMS
+     * provider write is reconciled via [ConversationListViewModel.patchThreadUnreadFromProvider].
+     */
+    val threadUnreadOverrides: Map<Long, Int> = emptyMap(),
+    /**
      * Generic whitelisted apps (parent-approved, installed on device, with a launch intent).
      * Excludes the launcher itself and any packages already surfaced as dedicated nav items
      * (Calendar, Weather). Rendered inside the hamburger menu under "Apps".
@@ -122,7 +128,13 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     private val smsRepo = SmsRepository(application)
     private val prefs = application.getSharedPreferences("wew_prefs", Context.MODE_PRIVATE)
 
-    /** Only one list refresh at a time — SMS observer + load() must not overlap. */
+    /**
+     * Only one list refresh at a time — SMS observer + load() must not overlap.
+     * Read/unread toggles also take this lock so a debounced [applyConversationList] cannot
+     * interleave between provider writes and [patchThreadUnreadFromProvider], which used to
+     * overwrite [ConversationItem.thread.unreadCount] with stale per-thread counts from
+     * [SmsRepository.getThreads] and break subsequent swipe actions.
+     */
     private val listRefreshMutex = Mutex()
 
     private val _uiState = MutableStateFlow(ConversationListUiState())
@@ -211,7 +223,8 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 it.copy(
                     isLoading = false,
                     conversations = emptyList(),
-                    deviceId = ""
+                    deviceId = "",
+                    threadUnreadOverrides = emptyMap()
                 )
             }
             return
@@ -228,7 +241,8 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                     s.copy(
                         conversations = emptyList(),
                         quarantineCount = 0,
-                        isLoading = false
+                        isLoading = false,
+                        threadUnreadOverrides = emptyMap()
                     )
                 }
             }
@@ -313,7 +327,8 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 approvedContacts = approvedContacts,
                 approvedCalendarPackage = calendarPkg,
                 approvedWeatherPackage = weatherPkg,
-                approvedApps = approvedApps
+                approvedApps = approvedApps,
+                threadUnreadOverrides = it.threadUnreadOverrides
             )
         }
     }
@@ -542,34 +557,97 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
     fun markRead(item: ConversationItem) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                smsRepo.markThreadRead(item.thread.threadId)
-            }
+            markReadPipeline(item.thread.threadId)
             dismissContextMenu()
-            load()
         }
     }
 
     /**
-     * Toggles the read state of [item] in response to a swipe gesture.
+     * When the user opens an existing thread in chat, mark it read with the same
+     * optimistic row update + targeted reconcile as [markRead] (no context menu).
+     */
+    fun markThreadReadOptimisticFromChat(threadId: Long) {
+        if (threadId == -1L) return
+        viewModelScope.launch { markReadPipeline(threadId) }
+    }
+
+    private suspend fun markReadPipeline(threadId: Long) {
+        _uiState.update {
+            it.copy(threadUnreadOverrides = it.threadUnreadOverrides + (threadId to 0))
+        }
+        listRefreshMutex.withLock {
+            try {
+                markReadWriteAndReconcile(threadId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("ConvListVM", "markReadPipeline failed: ${e.message}")
+                patchThreadUnreadFromProvider(threadId)
+            }
+        }
+    }
+
+    private suspend fun markReadWriteAndReconcile(threadId: Long) {
+        withContext(Dispatchers.IO) { smsRepo.markThreadRead(threadId) }
+        patchThreadUnreadFromProvider(threadId)
+    }
+
+    private suspend fun markUnreadWriteAndReconcile(threadId: Long) {
+        withContext(Dispatchers.IO) { smsRepo.markThreadUnread(threadId) }
+        patchThreadUnreadFromProvider(threadId)
+    }
+
+    /**
+     * Toggles the read state of thread [threadId] in response to a swipe gesture.
+     * Reads current [SmsThread.unreadCount] from live list state — not a captured
+     * [ConversationItem] — so list reorder/recycle doesn't apply the wrong toggle.
+     *
+     * Optimistic overrides are applied **before** acquiring [listRefreshMutex] so a slow
+     * [applyConversationList] refresh can't block immediate UI feedback at any row position.
+     *
      * Unread → read marks every unread row; read → unread flips only the most
      * recent incoming SMS or MMS so the unread count becomes 1 (iOS-style).
      */
-    fun toggleReadState(item: ConversationItem) {
+    fun toggleReadState(threadId: Long) {
+        if (threadId == -1L) return
         viewModelScope.launch {
-            val tid = item.thread.threadId
-            // Branch from the provider, not [item.thread.unreadCount]: the list can
-            // still show stale unread state after chat (debounced observer / timing).
-            withContext(Dispatchers.IO) {
-                if (smsRepo.providerUnreadCount(tid) > 0) {
-                    smsRepo.markThreadRead(tid)
-                } else {
-                    smsRepo.markThreadUnread(tid)
+            val snap = _uiState.value
+            val conversation = snap.conversations.find { it.thread.threadId == threadId }
+                ?: return@launch
+            val effectiveUnread =
+                snap.threadUnreadOverrides.getOrElse(threadId) { conversation.thread.unreadCount }
+            val willMarkRead = effectiveUnread > 0
+            val optimisticUnread = if (willMarkRead) 0 else 1
+
+            _uiState.update {
+                it.copy(threadUnreadOverrides = it.threadUnreadOverrides + (threadId to optimisticUnread))
+            }
+
+            listRefreshMutex.withLock {
+                try {
+                    if (willMarkRead) markReadWriteAndReconcile(threadId) else markUnreadWriteAndReconcile(threadId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("ConvListVM", "toggleReadState failed: ${e.message}")
+                    patchThreadUnreadFromProvider(threadId)
                 }
             }
-            // observeSmsChanges will refresh the list; load() keeps behaviour
-            // consistent if the observer is slow to fire on this OEM.
-            load()
+        }
+    }
+
+    /** Re-query unread count for one thread from the provider and drop any optimistic override. */
+    private suspend fun patchThreadUnreadFromProvider(threadId: Long) {
+        val count = withContext(Dispatchers.IO) { smsRepo.providerUnreadCount(threadId) }
+        _uiState.update { s ->
+            s.copy(
+                conversations = s.conversations.map { item ->
+                    if (item.thread.threadId == threadId) {
+                        item.copy(thread = item.thread.copy(unreadCount = count))
+                    } else item
+                },
+                threadUnreadOverrides = s.threadUnreadOverrides - threadId
+            )
         }
     }
 

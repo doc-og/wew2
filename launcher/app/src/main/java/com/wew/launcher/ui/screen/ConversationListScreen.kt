@@ -59,6 +59,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -204,13 +205,17 @@ fun ConversationListScreen(
                     contentPadding = PaddingValues(bottom = 80.dp)
                 ) {
                     items(state.conversations, key = { it.thread.threadId }) { item ->
-                        SwipeableThreadRow(
-                            item = item,
-                            displayZone = messageDisplayZone,
-                            onClick = { onOpenThread(item) },
-                            onLongPress = { viewModel.onLongPress(item) },
-                            onToggleRead = { viewModel.toggleReadState(item) }
-                        )
+                        key(item.thread.threadId) {
+                            val displayUnread = state.effectiveUnreadFor(item)
+                            SwipeableThreadRow(
+                                item = item,
+                                displayUnreadCount = displayUnread,
+                                displayZone = messageDisplayZone,
+                                onClick = { onOpenThread(item) },
+                                onLongPress = { viewModel.onLongPress(item) },
+                                onToggleRead = { viewModel.toggleReadState(item.thread.threadId) }
+                            )
+                        }
                     }
                 }
             }
@@ -237,7 +242,7 @@ fun ConversationListScreen(
                 if (target.isMuted) viewModel.unmuteThread(target)
                 else viewModel.muteThread(target)
             }
-            if (target.thread.unreadCount > 0) {
+            if (state.effectiveUnreadFor(target) > 0) {
                 ContextMenuItem("Mark as read") { viewModel.markRead(target) }
             }
             if (!target.isParent) {
@@ -372,6 +377,9 @@ private fun formatTokens(n: Int): String = when {
     else -> n.toString()
 }
 
+private fun ConversationListUiState.effectiveUnreadFor(item: ConversationItem): Int =
+    threadUnreadOverrides.getOrElse(item.thread.threadId) { item.thread.unreadCount }
+
 // ── Thread row ────────────────────────────────────────────────────────────────
 
 /**
@@ -384,12 +392,13 @@ private fun formatTokens(n: Int): String = when {
 @Composable
 private fun SwipeableThreadRow(
     item: ConversationItem,
+    displayUnreadCount: Int,
     displayZone: ZoneId,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
     onToggleRead: () -> Unit
 ) {
-    val isUnread = item.thread.unreadCount > 0
+    val isUnread = displayUnreadCount > 0
     var swipeActionEpoch by remember { mutableIntStateOf(0) }
     // Key by thread id so the swipe state resets if a different thread ever
     // recycles into this list slot.
@@ -397,15 +406,13 @@ private fun SwipeableThreadRow(
         confirmValueChange = { value ->
             if (value == androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd) {
                 onToggleRead()
-                // Bump after dismissState exists — LaunchedEffect below calls reset() so the
-                // next swipe isn't eaten by M3 internal state after we veto dismiss.
                 swipeActionEpoch++
             }
-            // Never actually dismiss: we fire the side effect and let the row
-            // animate back to its resting position.
             false
         },
-        positionalThreshold = { distance -> distance * 0.30f }
+        // Slightly below default (0.4) so horizontal swipes compete less with LazyColumn scrolling,
+        // including the top row where gesture routing can be picky.
+        positionalThreshold = { distance -> distance * 0.22f }
     )
     LaunchedEffect(swipeActionEpoch) {
         if (swipeActionEpoch > 0) dismissState.reset()
@@ -419,6 +426,7 @@ private fun SwipeableThreadRow(
     ) {
         ThreadRow(
             item = item,
+            displayUnreadCount = displayUnreadCount,
             displayZone = displayZone,
             onClick = onClick,
             onLongPress = onLongPress
@@ -461,6 +469,7 @@ private fun SwipeToggleReadBackground(showsMarkRead: Boolean) {
 @Composable
 private fun ThreadRow(
     item: ConversationItem,
+    displayUnreadCount: Int,
     displayZone: ZoneId,
     onClick: () -> Unit,
     onLongPress: () -> Unit
@@ -486,7 +495,7 @@ private fun ThreadRow(
             modifier = Modifier.width(10.dp),
             contentAlignment = Alignment.Center
         ) {
-            if (item.thread.unreadCount > 0) {
+            if (displayUnreadCount > 0) {
                 UnreadDot()
             }
         }
@@ -522,7 +531,7 @@ private fun ThreadRow(
                     Text(
                         text = item.resolvedName,
                         fontSize = 16.sp,
-                        fontWeight = if (item.thread.unreadCount > 0) FontWeight.SemiBold else FontWeight.Normal,
+                        fontWeight = if (displayUnreadCount > 0) FontWeight.SemiBold else FontWeight.Normal,
                         color = OnNight,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -554,7 +563,7 @@ private fun ThreadRow(
                 Text(
                     text = MessageTimeFormat.formatThreadPreview(item.thread.date, displayZone),
                     fontSize = 12.sp,
-                    color = if (item.thread.unreadCount > 0) BrandViolet else OnNight.copy(alpha = 0.5f),
+                    color = if (displayUnreadCount > 0) BrandViolet else OnNight.copy(alpha = 0.5f),
                     maxLines = 1,
                     softWrap = false,
                     textAlign = TextAlign.End,
@@ -573,7 +582,7 @@ private fun ThreadRow(
                 fontSize = 14.sp,
                 color = when {
                     item.isReplyBlocked -> WarningAmber
-                    item.thread.unreadCount > 0 -> OnNight
+                    displayUnreadCount > 0 -> OnNight
                     else -> OnNight.copy(alpha = 0.55f)
                 },
                 maxLines = 1,
